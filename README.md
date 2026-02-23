@@ -2,6 +2,21 @@
 
 A Discord bot that builds cross-platform apps from natural language. Describe what you want, and it scaffolds a Kotlin Multiplatform project, has Claude Code write the code, auto-fixes build errors, and demos the result on Android, iOS, and Web — all from your phone.
 
+<table>
+  <tr>
+    <td align="center">
+      <img src="https://github.com/user-attachments/assets/4d1a97e5-fe18-4b71-97bd-db494078c1be" width="350"/>
+    </td>
+    <td align="center">
+      <img src="https://github.com/user-attachments/assets/db6b4b82-d410-4bcb-9f66-3b0f5fcfe6b9" width="350"/>
+    </td>
+        <td align="center">
+      <img src="https://github.com/user-attachments/assets/a99cb18f-871e-4551-8b48-baa6f7f8cd10" width="350"/>
+    </td>
+  </tr>
+
+</table>
+
 ## How it works
 
 You DM the bot something like `/buildapp a habit tracker with streaks`. Behind the scenes:
