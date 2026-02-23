@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+
+# Environment (contains secrets)
+.env
+.env.bak
+
+# Runtime state
+workspaces.json
+workspaces.json.bak
+
+# Old/backup files
+bot_new.py
+bot_orig.py
+
+# Claude local settings
+.claude/
+
+# Created projects (outside the bot)
+~/
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Logs
+*.log
