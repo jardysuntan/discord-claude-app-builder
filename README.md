@@ -139,6 +139,8 @@ This scaffolds, builds, and demos everything. You'll get screenshots, a video, a
 | `/fix [instructions]` | Auto-fix build errors with Claude |
 | `/vid` | Record a video from the Android emulator |
 | `/deleteapp <name>` | Remove a project and its workspace |
+| `/queue task1 --- task2 --- ...` | Queue tasks for sequential execution with daily budget |
+| `/spend` | Check today's spend and remaining budget |
 | `@workspace <prompt>` | Send a prompt to Claude in that project |
 | `/run <cmd>` | Run a command in the workspace directory |
 | `/status` `/diff` `/commit` `/pr` | Git workflow |

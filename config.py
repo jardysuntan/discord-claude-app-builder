@@ -52,6 +52,10 @@ TEMPLATE_OLD_PKG: str = os.getenv("TEMPLATE_OLD_PKG", "com.jaredtan.kmptemplate"
 SCRCPY_DIR: str = os.getenv("SCRCPY_DIR", os.path.expanduser("~/tools/ws-scrcpy"))
 SCRCPY_PORT: int = int(os.getenv("SCRCPY_PORT", "8000"))
 
+# ── Queue & Budget ──────────────────────────────────────────────────────
+DAILY_TOKEN_CAP_USD: float = float(os.getenv("DAILY_TOKEN_CAP_USD", "50"))
+QUEUE_STOP_PCT: int = int(os.getenv("QUEUE_STOP_PCT", "90"))
+
 # ── Limits ───────────────────────────────────────────────────────────────────
 MAX_DISCORD_MSG_LEN: int = 1900
 SCREEN_RECORD_SECONDS: int = int(os.getenv("SCREEN_RECORD_SECONDS", "15"))

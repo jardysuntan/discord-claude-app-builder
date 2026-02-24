@@ -22,6 +22,7 @@ class ClaudeResult:
     stderr: str
     exit_code: int
     session_id: Optional[str] = None
+    total_cost_usd: float = 0.0
 
 
 def _resolve_claude_bin() -> str:
@@ -110,11 +111,13 @@ class ClaudeRunner:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=workspace_path,
+                limit=10 * 1024 * 1024,  # 10MB — default 64KB is too small for large stream-json events
             )
             print(f"[claude] Process started: pid={proc.pid}")
 
             result_text = ""
             result_session_id = None
+            result_cost_usd = 0.0
             stderr_chunks = []
             last_progress_time = time.time()
             MIN_PROGRESS_INTERVAL = 3  # seconds between Discord updates
@@ -168,7 +171,8 @@ class ClaudeRunner:
                     result_text = event.get("result", "")
                     result_session_id = event.get("session_id")
                     is_error = event.get("is_error", False)
-                    cost = event.get("total_cost_usd")
+                    cost = event.get("total_cost_usd", 0) or 0
+                    result_cost_usd = float(cost)
                     duration = event.get("duration_ms", 0) / 1000
                     print(f"[claude] Result: error={is_error} cost=${cost:.4f} duration={duration:.1f}s")
 
@@ -204,4 +208,5 @@ class ClaudeRunner:
             stderr=stderr,
             exit_code=exit_code,
             session_id=result_session_id or session_id,
+            total_cost_usd=result_cost_usd,
         )

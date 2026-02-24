@@ -16,8 +16,9 @@ import parser as msg_parser
 from parser import WorkspacePrompt, Command, FallbackPrompt
 from workspaces import WorkspaceRegistry
 from claude_runner import ClaudeRunner
-from commands import run_cmd, memory_cmd, buildapp, fix
+from commands import run_cmd, memory_cmd, buildapp, fix, queue
 from commands import git_cmd
+from cost_tracker import CostTracker
 from commands.create import create_kmp_project
 from platforms import demo_platform, build_platform, deploy_ios, deploy_android, AndroidPlatform, WebPlatform
 
@@ -36,6 +37,7 @@ config.print_config_summary()
 
 registry = WorkspaceRegistry()
 claude = ClaudeRunner()
+cost_tracker = CostTracker()
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -72,6 +74,9 @@ def help_text():
         "`/showcase <app>` — video demo for everyone *(server)*\n"
         "`/tryapp <app>` — live emulator for anyone *(server)*\n"
         "`/showcase gallery` · `/done`\n\n"
+        "**Queue:**\n"
+        "`/queue task1 --- task2 --- ...` — run tasks overnight\n"
+        "`/spend` — check daily spend & remaining budget\n\n"
         "**Terminal:**\n"
         "`/run <cmd>` · `/runsh <cmd>`\n\n"
         "**Git & GitHub:**\n"
@@ -173,7 +178,14 @@ async def on_message(message: discord.Message):
             await send(channel, msg)
 
         result = await claude.run(prompt, ws_key, ws_path, on_progress=claude_progress)
+        cost_tracker.add(result.total_cost_usd)
         if result.exit_code != 0 and result.stderr:
+            # Auto-reset session on context compaction crash so next message works
+            if "chunk" in result.stderr and "limit" in result.stderr:
+                claude.clear_session(ws_key)
+                return await send(channel,
+                    "⚠️ Session too large — context compaction crashed.\n"
+                    "Session has been auto-reset. Please resend your message.")
             return await send(channel, f"⚠️ Error:\n```\n{result.stderr[:1500]}\n```")
         return await send(channel, result.stdout or "(empty)")
 
@@ -308,6 +320,34 @@ async def on_message(message: discord.Message):
                 await send(channel, msg, file_path=fpath)
             await fix.handle_fix(cmd.raw_cmd or "", ws_key, ws_path, claude,
                                  on_status=fix_status)
+
+        case "queue":
+            if not config.AGENT_MODE:
+                return await send(channel, "🔒 Agent mode OFF.")
+            if not cmd.raw_cmd:
+                return await send(channel, "Usage: `/queue task1 --- task2 --- task3`")
+            ws_key, ws_path = registry.resolve(None, message.author.id)
+            if not ws_path:
+                return await send(channel, "❌ No workspace set.")
+            async def queue_status(msg, fpath=None):
+                await send(channel, msg, file_path=fpath)
+            await queue.handle_queue(
+                cmd.raw_cmd, ws_key, ws_path, claude, cost_tracker,
+                on_status=queue_status,
+            )
+
+        case "spend":
+            spent = cost_tracker.today_spent()
+            cap = config.DAILY_TOKEN_CAP_USD
+            tasks = cost_tracker.today_tasks()
+            remaining = max(0, cap * (config.QUEUE_STOP_PCT / 100.0) - spent)
+            return await send(channel, (
+                f"💰 **Daily Spend**\n"
+                f"  Today: ${spent:.4f}\n"
+                f"  Budget: ${cap:.2f} ({config.QUEUE_STOP_PCT}% cap)\n"
+                f"  Remaining: ${remaining:.2f}\n"
+                f"  Tasks: {tasks}"
+            ))
 
         case "run":
             if not config.AGENT_MODE:

@@ -149,6 +149,12 @@ def parse(text: str) -> ParseResult:
             case "/done":
                 return Command(name="done")
 
+            # ── Queue & spend ────────────────────────────────────────
+            case "/queue":
+                return Command(name="queue", raw_cmd=rest or None)
+            case "/spend":
+                return Command(name="spend")
+
             # ── Memory & system ──────────────────────────────────────
             case "/memory":
                 mem_parts = rest.split(None, 1)

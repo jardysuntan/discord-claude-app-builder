@@ -12,6 +12,7 @@ venv/
 # Runtime state
 workspaces.json
 workspaces.json.bak
+cost_tracker.json
 
 # Old/backup files
 bot_new.py
