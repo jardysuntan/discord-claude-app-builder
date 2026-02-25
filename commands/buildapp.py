@@ -41,6 +41,7 @@ Requirements:
 - Platform-specific code only where absolutely necessary (use expect/actual)
 - Make sure ALL imports exist and ALL dependencies are in build.gradle.kts
 - Verify the code compiles for Android target first
+- IMPORTANT: Do NOT use emoji characters (Unicode emoji) in the UI. They render as broken boxes on the Web (WASM) target. Use Material Icons from `androidx.compose.material.icons.Icons` instead.
 
 Write complete, working code. No TODOs or placeholders."""
 
@@ -103,15 +104,35 @@ async def handle_buildapp(
     android_demo = await AndroidPlatform.full_demo(ws_path)
     await on_status(android_demo.message, android_demo.screenshot_path)
 
-    # 4. Web build (so anyone can try it in browser)
-    await on_status("🌐 **Web** — building browser version...", None)
-    web_demo = await WebPlatform.full_demo(ws_path)
-    if web_demo.success:
-        await on_status(
-            f"✅ Web version live → {web_demo.demo_url}\n"
-            f"Anyone can try it in their browser!",
-            None,
-        )
+    # 4. Web build + auto-fix (so anyone can try it in browser)
+    await on_status("🌐 **Web** — building and fixing browser version...", None)
+    web_loop = await run_agent_loop(
+        initial_prompt=(
+            "The Android target compiles. Now ensure the wasmJs web target "
+            "also compiles. Fix any web-specific issues. "
+            "Only modify what's necessary for web compatibility."
+        ),
+        workspace_key=slug,
+        workspace_path=ws_path,
+        claude=claude,
+        platform="web",
+        on_status=loop_status,
+    )
+    web_summary = format_loop_summary(web_loop)
+    await on_status(web_summary, None)
+
+    web_demo_url = None
+    if web_loop.success:
+        url = await WebPlatform.serve(ws_path)
+        if url:
+            web_demo_url = url
+            await on_status(
+                f"✅ Web version live → {url}\n"
+                f"Anyone can try it in their browser!",
+                None,
+            )
+        else:
+            await on_status("✅ Web builds but couldn't start server.", None)
     else:
         await on_status(
             f"⚠️ Web build had issues (Android version works fine).\n"
@@ -134,15 +155,17 @@ async def handle_buildapp(
     elapsed = int(time.time() - start_time)
     mins, secs = divmod(elapsed, 60)
 
+    build_attempts = loop_result.total_attempts + web_loop.total_attempts
+
     platform_status = []
     platform_status.append(f"  📱 Android: {'✅' if loop_result.success else '❌'}")
-    platform_status.append(f"  🌐 Web: {'✅ ' + (web_demo.demo_url or '') if web_demo.success else '❌'}")
+    platform_status.append(f"  🌐 Web: {'✅ ' + (web_demo_url or '') if web_loop.success else '❌'}")
     platform_status.append(f"  🍎 iOS: {'✅' if ios_demo.success else '❌'}")
 
     await on_status(
         f"🎉 **{app_name}** built!\n\n"
         f"  ⏱️ Total: {mins}m {secs}s\n"
-        f"  🔨 Build attempts: {loop_result.total_attempts}\n\n"
+        f"  🔨 Build attempts: {build_attempts}\n\n"
         + "\n".join(platform_status) + "\n\n"
         f"Commands:\n"
         f"  `@{slug} <prompt>` — add features\n"

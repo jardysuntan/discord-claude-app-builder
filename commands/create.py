@@ -79,6 +79,13 @@ async def create_kmp_project(app_name: str, registry: WorkspaceRegistry) -> Crea
         f"- Shared UI in `composeApp/src/commonMain/` using Compose Multiplatform\n"
         f"- Platform-specific code in `androidMain/`, `iosMain/`, `wasmJsMain/`\n"
         f"- Use `expect`/`actual` for platform APIs\n\n"
+        f"## iOS Widget Extension\n"
+        f"- Location: `iosApp/WidgetExtension/`\n"
+        f"- Pure SwiftUI + WidgetKit (NOT Compose — widgets can't use Compose)\n"
+        f"- Can `import ComposeApp` to access shared KMP framework for data/logic\n"
+        f"- Entry point: `WidgetExtensionBundle.swift`, widget code: `AppWidget.swift`\n\n"
+        f"## UI Rules\n"
+        f"- Do NOT use emoji characters (Unicode emoji) in UI text — they render as broken boxes on the Web (WASM) target. Use Material Icons from `androidx.compose.material.icons.Icons` instead.\n\n"
         f"## Decisions\n"
         f"(Claude will append notes here)\n"
     )
@@ -107,7 +114,7 @@ def _rewrite_packages(project_dir: Path, old_pkg: str, new_pkg: str, app_name: s
     new_path = new_pkg.replace(".", os.sep)
 
     # Text replacement in source files
-    for ext in ("*.kt", "*.kts", "*.xml", "*.plist", "*.swift", "*.pbxproj"):
+    for ext in ("*.kt", "*.kts", "*.xml", "*.plist", "*.swift", "*.pbxproj", "*.xcconfig"):
         for fpath in project_dir.rglob(ext):
             if fpath.is_file():
                 try:
@@ -116,6 +123,19 @@ def _rewrite_packages(project_dir: Path, old_pkg: str, new_pkg: str, app_name: s
                         fpath.write_text(text.replace(old_pkg, new_pkg))
                 except (UnicodeDecodeError, PermissionError):
                     pass
+
+    # Replace template app name with actual app name
+    template_name = "KMPTemplate"
+    if app_name != template_name:
+        for ext in ("*.swift", "*.pbxproj", "*.xcconfig", "*.kts"):
+            for fpath in project_dir.rglob(ext):
+                if fpath.is_file():
+                    try:
+                        text = fpath.read_text()
+                        if template_name in text:
+                            fpath.write_text(text.replace(template_name, app_name))
+                    except (UnicodeDecodeError, PermissionError):
+                        pass
 
     # Move source directories
     for src_set in ["commonMain", "androidMain", "iosMain", "wasmJsMain", "desktopMain"]:

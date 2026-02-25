@@ -42,6 +42,7 @@ IOS_SIMULATOR_RUNTIME: str = os.getenv("IOS_SIMULATOR_RUNTIME", "iOS-18-0")
 
 # ── Web ──────────────────────────────────────────────────────────────────────
 WEB_SERVE_PORT: int = int(os.getenv("WEB_SERVE_PORT", "9000"))
+DASHBOARD_PORT: int = int(os.getenv("DASHBOARD_PORT", "9001"))
 TAILSCALE_HOSTNAME: str = os.getenv("TAILSCALE_HOSTNAME", "")
 
 # ── KMP Scaffolding ─────────────────────────────────────────────────────────

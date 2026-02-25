@@ -137,6 +137,7 @@ This scaffolds, builds, and demos everything. You'll get screenshots, a video, a
 | `/demo android\|ios\|web` | Launch and demo (emulator/browser) |
 | `/deploy ios\|android` | Install on a physical device |
 | `/fix [instructions]` | Auto-fix build errors with Claude |
+| `/widget <description>` | Add iOS home screen widget (WidgetKit) |
 | `/vid` | Record a video from the Android emulator |
 | `/deleteapp <name>` | Remove a project and its workspace |
 | `/queue task1 --- task2 --- ...` | Queue tasks for sequential execution with daily budget |

@@ -41,6 +41,23 @@ class WorkspaceRegistry:
         self._workspaces.pop(key.lower(), None)
         self._save()
 
+    def rename(self, old_key: str, new_key: str) -> bool:
+        """Rename a workspace key. Returns False if old doesn't exist or new already taken."""
+        old_key = old_key.lower()
+        new_key = new_key.lower()
+        if old_key not in self._workspaces or new_key in self._workspaces:
+            return False
+        path = self._workspaces.pop(old_key)
+        self._workspaces[new_key] = path
+        # Update any user defaults pointing to the old key
+        for uid, default in self._user_defaults.items():
+            if default == old_key:
+                self._user_defaults[uid] = new_key
+        if self._global_default == old_key:
+            self._global_default = new_key
+        self._save()
+        return True
+
     def set_default(self, user_id: int, key: str) -> bool:
         if not self.exists(key):
             return False
