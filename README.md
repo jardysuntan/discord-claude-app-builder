@@ -21,32 +21,96 @@ A Discord bot that builds cross-platform apps from natural language. Describe wh
 
 </table>
 
+---
+
+## Getting Started
+
+You don't need to know how to code. Once the bot is running (see [Setup](#setup) below), everything happens through Discord messages.
+
+### Build your first app
+
+DM the bot:
+
+```
+/buildapp a pomodoro timer with task categories
+```
+
+That's it. Wait a few minutes and you'll get:
+- A screenshot of your app running on Android
+- A video recording of it in action
+- A web link you can open on your phone right now
+- An iOS build ready for the simulator (or TestFlight)
+
+### Talk to your app
+
+Every app gets its own workspace. Use `@appname` to tell Claude what to change:
+
+```
+@pomodoro add a dark mode toggle
+@pomodoro make the timer bigger and use a circular progress bar
+@pomodoro add sound effects when the timer ends
+```
+
+Then rebuild to see the changes:
+
+```
+/demo web
+/demo android
+/demo ios
+```
+
+### What you can say
+
+| Command | What it does |
+|---------|-------------|
+| `/buildapp <describe anything>` | Build a full app from a description |
+| `@appname <request>` | Tell Claude to change your app |
+| `/demo android` or `ios` or `web` | See your app running |
+| `/fix` | Auto-fix build errors (Claude reads the error and fixes it) |
+| `/deploy ios` | Install directly on your iPhone |
+| `/testflight` | Upload to TestFlight so anyone can install it |
+| `/widget <description>` | Add an iOS home screen widget |
+| `/vid` | Record a video of the Android app |
+| `/dashboard` | A launcher page showing all your apps |
+| `/ls` | See all your projects |
+| `/use <appname>` | Switch to a different project |
+| `/fixes` | See what build errors Claude has fixed so far |
+| `/help` | Full command list |
+
+### Tips for better results
+
+- **Be specific.** "A workout tracker with exercise categories, sets/reps logging, and a rest timer" works way better than "a fitness app."
+- **Iterate in small steps.** Build the core idea first, then layer on features one at a time with `@appname`.
+- **Let the bot fix itself.** If something breaks, the bot automatically tries to fix it. You can also run `/fix` with extra instructions like `/fix use Material 3 colors`.
+- **Check the fix log.** `/fixes` shows you every error Claude has encountered and how it fixed it — the bot remembers these so it doesn't make the same mistake twice.
+
+### Typical flow from your phone
+
+1. `/buildapp a workout tracker` — wait a few minutes, get screenshots + web link
+2. Open the web link on your phone to try it out
+3. `@workouttracker add a rest timer between sets` — Claude modifies the code
+4. `/demo web` — see the update instantly
+5. `/testflight` — upload so friends can install it on their iPhones
+
+---
+
 ## How it works
 
 You DM the bot something like `/buildapp a habit tracker with streaks`. Behind the scenes:
 
-1. A KMP project gets scaffolded from a template (or generated from scratch)
-2. Claude Code CLI writes all the Compose Multiplatform UI and logic
+1. A project gets scaffolded from a template
+2. Claude Code writes all the UI and logic
 3. The bot builds for Android — if it fails, Claude reads the errors and fixes them (up to 8 attempts)
 4. Once it compiles, you get a screenshot and video from the Android emulator
-5. It builds for Web (WASM) and gives you a link to play with the app in your browser
-6. It builds for iOS — if it fails, Claude fixes those too, including crash-on-launch detection and auto-fix
+5. It builds for Web and gives you a link to try the app in your browser
+6. It builds for iOS — if it fails, Claude fixes those too, including crash-on-launch detection
 7. `/testflight` uploads to TestFlight so anyone can install it natively
 
-The whole thing takes a few minutes. You get real-time progress updates in Discord — with friendly labels like "Building project..." instead of raw tool names.
+You get real-time progress updates in Discord as Claude works.
 
-**Build fix memory:** Every error and fix is logged to `.fixes.md` in each workspace. The next time a build fails, Claude sees what went wrong before and avoids repeating mistakes.
+**Build fix memory:** Every error and fix is logged per project. The next time a build fails, Claude sees what went wrong before and avoids repeating mistakes.
 
-## Tech stack
-
-- **Python 3.10+** with **discord.py** — the bot itself (uses match/case)
-- **Claude Code CLI** — AI that writes and fixes the app code
-- **Kotlin Multiplatform + Compose Multiplatform** — one codebase, three platforms
-- **Gradle** — builds Android (APK) and Web (WASM)
-- **Xcode** — builds iOS (simulator + physical device)
-- **PM2** — keeps the bot running, auto-restarts on code changes
-- **Tailscale** — lets you access web demos and Android mirrors from your phone
-- **ws-scrcpy** (optional) — browser-based Android emulator interaction
+---
 
 ## Setup
 
@@ -112,70 +176,58 @@ pm2 logs discord-claude-bridge
 python3 bot.py
 ```
 
-## Usage
+---
 
-All interaction happens via Discord DMs with the bot.
-
-### Build an app from scratch
-
-```
-/buildapp a pomodoro timer with task categories
-```
-
-This scaffolds, builds, and demos everything. You'll get screenshots, a video, and a web link.
-
-### Work on an existing project
-
-```
-/use myapp                          # set active workspace
-@myapp add a settings screen        # send prompts to Claude
-/build android                      # rebuild a specific platform
-/demo web                           # serve the web build
-/fix use Material 3 colors          # auto-fix with instructions
-```
-
-### Commands
+## All Commands
 
 | Command | What it does |
 |---------|-------------|
 | `/build app <description>` | Full pipeline: scaffold + build + demo all platforms |
-| `/create <AppName>` | Just scaffold a KMP project |
+| `/create <AppName>` | Just scaffold a project (no build) |
 | `/build android\|ios\|web` | Build for a specific platform |
-| `/demo android\|ios\|web` | Launch and demo (emulator/browser) |
+| `/demo android\|ios\|web` | Build + launch + screenshot |
 | `/deploy ios\|android` | Install on a physical device |
 | `/testflight` | Archive + upload to TestFlight |
 | `/fix [instructions]` | Auto-fix build errors with Claude |
-| `/widget <description>` | Add iOS home screen widget (WidgetKit) |
+| `/widget <description>` | Add iOS home screen widget |
 | `/vid` | Record a video from the Android emulator |
-| `/deleteapp <name>` | Remove a project and its workspace |
-| `/queue task1 --- task2 --- ...` | Queue tasks for sequential execution with daily budget |
+| `/deleteapp <name>` | Remove a project |
+| `/rename <old> <new>` | Rename a workspace |
+| `/queue task1 --- task2 --- ...` | Queue tasks for sequential execution |
 | `/spend` | Check today's spend and remaining budget |
 | `@workspace <prompt>` | Send a prompt to Claude in that project |
-| `/run <cmd>` | Run a command in the workspace directory |
+| `/run <cmd>` | Run a shell command in the workspace |
 | `/status` `/diff` `/commit` `/pr` | Git workflow |
 | `/ls` `/use` `/where` | Workspace management |
-| `/rename <old> <new>` | Rename a workspace |
-| `/dashboard` | iPhone-style launcher for all apps |
-| `/mirror start\|stop` | Start ws-scrcpy for Android mirroring |
-| `/showcase <ws>` | Share a demo publicly in a channel |
-| `/fixes` | View the persistent build fix log |
-| `/fixes clear` | Clear the fix log |
+| `/dashboard` | Web launcher for all apps |
+| `/mirror start\|stop` | Android emulator in browser |
+| `/showcase <ws>` | Share a demo publicly |
+| `/fixes` `/fixes clear` | View or clear the build fix log |
 | `/memory show\|pin\|reset` | Project memory (CLAUDE.md) |
-| `/newsession` | Reset Claude session for current workspace |
+| `/newsession` | Reset Claude session |
 | `/maintenance [msg\|off]` | Toggle maintenance mode (owner only) |
 | `/announce <msg>` | Post to announcement channel (owner only) |
-| `/setup` | Guided setup status + instructions |
+| `/setup` | Check setup status |
 | `/help` | Full command reference |
 
-### Typical flow from your phone
+---
 
-1. `/buildapp a workout tracker` — wait a few minutes, get screenshots + web link
-2. Open the web link on your phone to try the app
-3. `@workouttracker add a rest timer between sets` — Claude modifies the code
-4. `/build web` then `/demo web` — see the update
-5. `/deploy ios` — install directly on your iPhone (needs Xcode + provisioning)
+## Developer Reference
 
-## Architecture
+Everything below is for working on the bot itself.
+
+### Tech stack
+
+- **Python 3.10+** with **discord.py** — the bot itself (uses match/case)
+- **Claude Code CLI** — AI that writes and fixes the app code
+- **Kotlin Multiplatform + Compose Multiplatform** — one codebase, three platforms
+- **Gradle** — builds Android (APK) and Web (WASM)
+- **Xcode** — builds iOS (simulator + physical device)
+- **PM2** — keeps the bot running, auto-restarts on code changes
+- **Tailscale** — lets you access web demos and Android mirrors from your phone
+- **ws-scrcpy** (optional) — browser-based Android emulator interaction
+
+### Architecture
 
 ```
 Discord DM → parser.py → bot.py → handler
@@ -197,36 +249,6 @@ Key design decisions:
 - **Fix memory** — `.fixes.md` logs every error+fix per workspace; injected into future fix prompts so Claude learns from past mistakes
 - **Safety checks** — `/run` and `/runsh` have an allowlist; dangerous commands are blocked
 - **Maintenance mode** — owner can block public commands while updating the bot
-
-## Vibe Coder Setup (quick start)
-
-Just want to describe apps and see them built? Here's the minimum:
-
-1. **Get the bot running** (see [Install](#install) above)
-2. **DM the bot** on Discord: `/buildapp a pomodoro timer`
-3. **Wait a few minutes** — you'll see real-time progress as Claude writes code
-4. **Try your app** — open the web link on your phone, or watch the Android emulator screenshot
-
-That's it. You don't need to know Kotlin, Xcode, or Gradle. The bot handles everything.
-
-### What you can do from Discord
-
-- `/build app <describe anything>` — build a full cross-platform app
-- `@myapp add dark mode` — tell Claude to modify your app
-- `/demo android` or `/demo ios` or `/demo web` — see it running
-- `/fix` — auto-fix build errors (Claude reads the errors and fixes the code)
-- `/deploy ios` — install on your iPhone
-- `/testflight` — upload to TestFlight for anyone to install
-
-### Tips
-
-- Be specific in your descriptions: "a workout tracker with exercise categories, sets/reps logging, and a rest timer" works better than "a fitness app"
-- After building, use `@appname` to iterate: add features, change colors, fix bugs
-- `/dashboard` gives you a launcher page for all your apps in one place
-
-## Developer Setup
-
-Want to modify the bot itself, add new commands, or contribute? Here's the full setup.
 
 ### Project structure
 
