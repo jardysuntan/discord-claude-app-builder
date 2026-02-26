@@ -16,18 +16,23 @@ import parser as msg_parser
 from parser import WorkspacePrompt, Command, FallbackPrompt
 from workspaces import WorkspaceRegistry
 from claude_runner import ClaudeRunner
-from commands import run_cmd, memory_cmd, buildapp, fix, queue, widget
+from commands import run_cmd, memory_cmd, buildapp, fix, queue, widget, fixes_cmd
 from commands import git_cmd
 from commands.bot_todo import handle_bot_todo
 from commands.dashboard import handle_dashboard
+from commands.testflight import handle_testflight
 from cost_tracker import CostTracker
 from commands.create import create_kmp_project
 from agent_loop import run_agent_loop, format_loop_summary
-from platforms import demo_platform, build_platform, deploy_ios, deploy_android, AndroidPlatform, WebPlatform
+from platforms import demo_platform, build_platform, deploy_ios, deploy_android, AndroidPlatform, iOSPlatform, WebPlatform
 
 # ── Startup ──────────────────────────────────────────────────────────────────
 
 START_TIME = time.time()
+
+# ── Maintenance mode (runtime toggle, not persisted across restarts) ─────
+maintenance_mode: bool = False
+maintenance_message: str = "🔧 Bot is under maintenance — back shortly!"
 
 problems = config.validate()
 if problems:
@@ -139,62 +144,291 @@ class WorkspaceButton(discord.ui.Button):
             content=f"Switched to **{self.ws_key}**.", view=None)
 
 
+STILL_LISTENING = "💡 *I'm still listening — feel free to send other commands while this runs.*"
+
+
+async def _run_demo(channel, ws_key: str, ws_path: str, platform: str):
+    """Run a demo for a single platform. Shared by /demo <plat> and DemoPlatformView."""
+    await send(channel, f"📱 Demoing **{ws_key}** [{platform}]...")
+    await send(channel, STILL_LISTENING)
+
+    if platform == "ios":
+        await send(channel, "Booting iOS Simulator...")
+        ok, sim_msg = await iOSPlatform.ensure_simulator()
+        if not ok:
+            await send(channel, f"❌ {sim_msg}")
+        else:
+            await send(channel, f"{sim_msg} Building KMP framework + Xcode project...")
+            build_result = await iOSPlatform.build(ws_path)
+
+            # Auto-fix: if build fails, use agent loop (same as /buildapp iOS)
+            if not build_result.success:
+                await send(channel, "⚠️ iOS build failed — auto-fixing...")
+
+                async def ios_fix_status(msg):
+                    await send(channel, msg)
+
+                fix_result = await run_agent_loop(
+                    initial_prompt=(
+                        "The iOS build failed. Fix the code so it compiles for iOS.\n"
+                        "Only modify what's necessary for iOS compatibility.\n"
+                        f"IMPORTANT: When running xcodebuild, always use: -destination 'name={config.IOS_SIMULATOR_NAME}'\n\n"
+                        f"```\n{build_result.error[:800]}\n```"
+                    ),
+                    workspace_key=ws_key,
+                    workspace_path=ws_path,
+                    claude=claude,
+                    platform="ios",
+                    max_attempts=config.MAX_BUILD_ATTEMPTS,
+                    on_status=ios_fix_status,
+                )
+                if not fix_result.success:
+                    summary = format_loop_summary(fix_result)
+                    await send(channel, summary)
+                    build_result = None
+                else:
+                    await send(channel, "✅ iOS build fixed!")
+                    try:
+                        fixes_cmd.log_fix(ws_path, "ios", build_result.error[:300] if build_result.error else "Build error",
+                                          "Auto-fixed iOS build failure")
+                    except Exception:
+                        pass
+
+            if build_result is None:
+                pass  # auto-fix failed, already reported
+            else:
+                await send(channel, "Build succeeded. Installing on simulator...")
+                bundle_id = await iOSPlatform.install_and_launch(ws_path)
+                if bundle_id.startswith(("Could not", "Install failed", "Installed but")):
+                    await send(channel, f"❌ {bundle_id}")
+                else:
+                    await send(channel, f"Launched **{bundle_id}**. Checking for crashes...")
+                    await asyncio.sleep(3)
+
+                    # Check for runtime crash
+                    crash_log = await iOSPlatform.check_crash(bundle_id)
+                    if crash_log:
+                        await send(channel, "💥 App crashed on launch — auto-fixing...")
+                        async def crash_fix_status(msg):
+                            await send(channel, msg)
+
+                        crash_fixed = False
+                        for crash_attempt in range(1, config.MAX_BUILD_ATTEMPTS + 1):
+                            fix_result = await run_agent_loop(
+                                initial_prompt=(
+                                    f"The iOS app ({bundle_id}) crashes on launch with a runtime error.\n"
+                                    "Fix the code so it runs without crashing.\n"
+                                    f"IMPORTANT: When running xcodebuild, always use: -destination 'name={config.IOS_SIMULATOR_NAME}'\n\n"
+                                    f"Crash log:\n```\n{crash_log[:800]}\n```"
+                                ),
+                                workspace_key=ws_key,
+                                workspace_path=ws_path,
+                                claude=claude,
+                                platform="ios",
+                                max_attempts=config.MAX_BUILD_ATTEMPTS,
+                                on_status=crash_fix_status,
+                            )
+                            if not fix_result.success:
+                                await send(channel, format_loop_summary(fix_result))
+                                break
+
+                            # Rebuild succeeded — try launching again
+                            bundle_id = await iOSPlatform.install_and_launch(ws_path)
+                            if bundle_id.startswith(("Could not", "Install failed", "Installed but")):
+                                await send(channel, f"❌ {bundle_id}")
+                                break
+
+                            await asyncio.sleep(3)
+                            crash_log = await iOSPlatform.check_crash(bundle_id)
+                            if not crash_log:
+                                crash_fixed = True
+                                break
+                            await send(channel, f"💥 Still crashing (attempt {crash_attempt})— retrying fix...")
+
+                        if crash_fixed:
+                            await send(channel, "✅ Crash fixed!")
+                            try:
+                                fixes_cmd.log_fix(ws_path, "ios", f"Runtime crash: {crash_log[:300]}",
+                                                  "Fixed crash-on-launch")
+                            except Exception:
+                                pass
+                        else:
+                            if not crash_log:
+                                pass  # already reported above
+                            else:
+                                await send(channel, f"❌ App still crashing after {config.MAX_BUILD_ATTEMPTS} fix attempts.")
+                            return
+
+                    # App is running — take screenshot
+                    screenshot = await iOSPlatform.screenshot()
+                    await send(channel, f"✅ **{bundle_id}** running on iOS Simulator.", file_path=screenshot)
+    else:
+        result = await demo_platform(platform, ws_path)
+        msg = result.message
+        if result.demo_url:
+            msg += f"\n🔗 {result.demo_url}"
+        await send(channel, msg, file_path=result.screenshot_path)
+
+
+class DemoPlatformView(discord.ui.View):
+    """Platform picker buttons for /demo."""
+
+    def __init__(self, owner_id: int, ws_key: str, ws_path: str):
+        super().__init__(timeout=120)
+        self.owner_id = owner_id
+        self.ws_key = ws_key
+        self.ws_path = ws_path
+
+    @discord.ui.button(label="Android", style=discord.ButtonStyle.success, emoji="📱")
+    async def android(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.owner_id:
+            return await interaction.response.send_message("Not your command.", ephemeral=True)
+        self.stop()
+        await interaction.response.edit_message(view=None)
+        await _run_demo(interaction.channel, self.ws_key, self.ws_path, "android")
+
+    @discord.ui.button(label="iOS", style=discord.ButtonStyle.primary, emoji="🍎")
+    async def ios(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.owner_id:
+            return await interaction.response.send_message("Not your command.", ephemeral=True)
+        self.stop()
+        await interaction.response.edit_message(view=None)
+        await _run_demo(interaction.channel, self.ws_key, self.ws_path, "ios")
+
+    @discord.ui.button(label="Web", style=discord.ButtonStyle.secondary, emoji="🌐")
+    async def web(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.owner_id:
+            return await interaction.response.send_message("Not your command.", ephemeral=True)
+        self.stop()
+        await interaction.response.edit_message(view=None)
+        await _run_demo(interaction.channel, self.ws_key, self.ws_path, "web")
+
+
+class AddQueueTaskModal(discord.ui.Modal, title="Add a task"):
+    """Modal popup with a text field for one queue task."""
+
+    task = discord.ui.TextInput(
+        label="Task description",
+        style=discord.TextStyle.long,
+        max_length=500,
+        placeholder="e.g. add dark mode support",
+    )
+
+    def __init__(self, view: "QueueBuilderView"):
+        super().__init__()
+        self.queue_view = view
+
+    async def on_submit(self, interaction: discord.Interaction):
+        self.queue_view.tasks.append(self.task.value)
+        await interaction.response.edit_message(
+            content=self.queue_view.build_message(),
+            view=self.queue_view,
+        )
+
+
+class QueueBuilderView(discord.ui.View):
+    """Interactive wizard: add tasks one at a time, then start the queue."""
+
+    def __init__(self, owner_id: int, channel, ws_key: str, ws_path: str):
+        super().__init__(timeout=300)
+        self.owner_id = owner_id
+        self.channel = channel
+        self.ws_key = ws_key
+        self.ws_path = ws_path
+        self.tasks: list[str] = []
+
+    def build_message(self) -> str:
+        count = len(self.tasks)
+        label = "task" if count == 1 else "tasks"
+        header = f"📋 **Queue Builder** — {count} {label}"
+        if not self.tasks:
+            return header
+        listing = "\n".join(f"{i}. {t}" for i, t in enumerate(self.tasks, 1))
+        return f"{header}\n{listing}"
+
+    @discord.ui.button(label="Add task", style=discord.ButtonStyle.primary)
+    async def add_task(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.owner_id:
+            return await interaction.response.send_message("Not your command.", ephemeral=True)
+        await interaction.response.send_modal(AddQueueTaskModal(self))
+
+    @discord.ui.button(label="Start queue ▶️", style=discord.ButtonStyle.success)
+    async def start_queue(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.owner_id:
+            return await interaction.response.send_message("Not your command.", ephemeral=True)
+        if not self.tasks:
+            return await interaction.response.send_message("Add at least one task first.", ephemeral=True)
+        # Disable buttons and update message
+        self.stop()
+        await interaction.response.edit_message(
+            content=self.build_message() + "\n\n▶️ *Queue started…*",
+            view=None,
+        )
+        # Kick off the queue
+        raw = " --- ".join(self.tasks)
+
+        async def queue_status(msg, fpath=None):
+            await send(self.channel, msg, file_path=fpath)
+
+        await queue.handle_queue(
+            raw, self.ws_key, self.ws_path, claude, cost_tracker,
+            on_status=queue_status,
+        )
+
+    async def on_timeout(self):
+        pass
+
+
 async def send_workspace_footer(channel, user_id: int):
     """Send workspace footer with Switch button."""
+    keys = registry.list_keys()
+    if not keys:
+        return
     ws = registry.get_default(user_id)
+    view = WorkspaceFooterView(user_id)
     if ws:
-        view = WorkspaceFooterView(user_id)
         await channel.send(f"📂 workspace: **{ws}**", view=view)
+    else:
+        await channel.send("📂 No workspace set — pick one:", view=view)
 
 
 def help_text():
     agent = " *(agent ON)*" if config.AGENT_MODE else " *(agent OFF)*"
     return (
-        "**discord-claude-bridge v2 — KMP**" + agent + "\n\n"
-        "**Workspace:**\n"
-        "`@<ws> <prompt>` — Claude prompt in workspace\n"
-        "`/use <ws>` · `/where` · `/workspaces`\n"
-        "`/remove <ws>` — delete a workspace\n"
-        "`/rename <old> <new>` — rename a workspace\n\n"
-        "**Build & Ship (Kotlin Multiplatform):**\n"
-        "`/buildapp <description>` — idea → running app\n"
-        "`/create <AppName>` — scaffold KMP project\n"
-        "`/build android|ios|web` — build a target\n"
+        "**discord-claude-bridge** — build apps from chat" + agent + "\n\n"
+        "**Build Apps:**\n"
+        "`/build app <description>` — idea → running app\n"
+        "`/build android|ios|web` — build one platform\n"
         "`/demo android|ios|web` — build + screenshot\n"
-        "`/vid` — Android video recording\n"
         "`/fix [instructions]` — auto-fix build errors\n"
-        "`/widget <description>` — add iOS home screen widget\n\n"
-        "**Mirror & Showcase:**\n"
-        "`/mirror start|stop` — emulator in your browser\n"
-        "`/showcase <app>` — video demo for everyone *(server)*\n"
-        "`/tryapp <app>` — live emulator for anyone *(server)*\n"
-        "`/showcase gallery` · `/done`\n\n"
-        "**Queue:**\n"
-        "`/queue task1 --- task2 --- ...` — run tasks overnight\n"
-        "`/spend` — check daily spend & remaining budget\n\n"
-        "**Dashboard:**\n"
-        "`/dashboard` — iPhone-style launcher for all apps\n"
-        "`/dashboard rebuild` — force rebuild all web apps\n\n"
-        "**Terminal:**\n"
-        "`/run <cmd>` · `/runsh <cmd>`\n\n"
-        "**Git & GitHub:**\n"
-        "`/status` — branch + changed files\n"
-        "`/diff` — what changed (`/diff full` for patch)\n"
-        "`/commit [msg]` — commit + push (auto-generates msg)\n"
-        "`/undo` — revert last commit\n"
-        "`/log [n]` — recent commits\n"
-        "`/branch [name]` — show or create branch\n"
-        "`/stash` · `/stash pop`\n"
-        "`/pr [title]` — create GitHub PR\n"
-        "`/repo` · `/repo create` · `/repo set <url>`\n\n"
-        "**Memory:**\n"
-        "`/memory show|pin|reset`\n\n"
-        "**Bot Todos:**\n"
-        "`/bot-todo <note>` — add a todo\n"
-        "`/bot-todo` — list todos\n"
-        "`/bot-todo done <N>` — mark done\n\n"
+        "`/testflight` — upload to TestFlight\n"
+        "`/deploy ios|android` — install on device\n"
+        "`/vid` — record Android emulator\n"
+        "`/widget <desc>` — add iOS widget\n\n"
+        "**Workspaces:**\n"
+        "`@<ws> <prompt>` — talk to Claude in a workspace\n"
+        "`/use <ws>` · `/ls` — switch / list workspaces\n"
+        "`/create <Name>` — scaffold new project\n"
+        "`/remove <ws>` · `/rename <old> <new>`\n\n"
+        "**Git:**\n"
+        "`/status` · `/diff` · `/commit [msg]` · `/log`\n"
+        "`/branch [name]` · `/stash` · `/pr [title]`\n"
+        "`/undo` · `/repo`\n\n"
+        "**Tools:**\n"
+        "`/run <cmd>` — run shell command in workspace\n"
+        "`/queue task1 --- task2` — batch tasks\n"
+        "`/spend` — daily budget\n"
+        "`/dashboard` — web launcher for all apps\n"
+        "`/bot-todo` — track improvements\n"
+        "`/memory show|pin|reset` — project memory\n"
+        "`/fixes show|clear` — build fix log\n\n"
         "**System:**\n"
-        "`/health` · `/reload` · `/newsession`"
+        "`/setup` · `/health` · `/reload` · `/newsession`\n\n"
+        "**Owner Only:**\n"
+        "`/maintenance` — block public commands while updating\n"
+        "`/maintenance <msg>` — custom maintenance message\n"
+        "`/maintenance off` — resume public access\n"
+        "`/announce <msg>` — post to announcement channel"
     )
 
 
@@ -203,10 +437,19 @@ def help_text():
 @client.event
 async def on_ready():
     print(f"✅ Logged in as {client.user}")
+    # DM the owner on startup
+    try:
+        owner = await client.fetch_user(config.DISCORD_ALLOWED_USER_ID)
+        if owner:
+            await owner.send("✅ Bot is back online and updated!")
+            print(f"  Announced to {owner.display_name}")
+    except Exception as e:
+        print(f"  ⚠️ Could not DM owner: {e}")
 
 
 @client.event
 async def on_message(message: discord.Message):
+    global maintenance_mode, maintenance_message
     if message.author.bot:
         return
 
@@ -221,6 +464,8 @@ async def on_message(message: discord.Message):
 
     # ── Public commands (server + DM, any user) ──────────────────────────
     if isinstance(parsed, Command) and parsed.name in ("showcase", "tryapp", "gallery", "done"):
+        if maintenance_mode and not is_owner:
+            return await send(channel, maintenance_message)
         if not config.AGENT_MODE:
             return await send(channel, "🔒 Agent mode is OFF.")
 
@@ -274,20 +519,32 @@ async def on_message(message: discord.Message):
             return await send(channel, f"❌ Workspace `{ws_key}` not found.")
 
         await send(channel, f"🧠 Thinking in **{ws_key}**…")
+        await send(channel, STILL_LISTENING)
 
         async def claude_progress(msg):
             await send(channel, msg)
 
         result = await claude.run(prompt, ws_key, ws_path, on_progress=claude_progress)
         cost_tracker.add(result.total_cost_usd)
-        if result.exit_code != 0 and result.stderr:
+        if result.exit_code != 0:
+            error_detail = result.stderr.strip() or result.stdout.strip() or ""
             # Auto-reset session on context compaction crash so next message works
-            if "chunk" in result.stderr and "limit" in result.stderr:
+            if error_detail and "chunk" in error_detail and "limit" in error_detail:
                 claude.clear_session(ws_key)
                 return await send(channel,
                     "⚠️ Session too large — context compaction crashed.\n"
                     "Session has been auto-reset. Please resend your message.")
-            return await send(channel, f"⚠️ Error:\n```\n{result.stderr[:1500]}\n```")
+            # Retry once on transient failures
+            if not error_detail or "timeout" in error_detail.lower():
+                claude.clear_session(ws_key)
+                await send(channel, "⚠️ Claude failed, retrying...")
+                result = await claude.run(prompt, ws_key, ws_path, on_progress=claude_progress)
+                cost_tracker.add(result.total_cost_usd)
+                if result.exit_code != 0:
+                    error_detail = result.stderr.strip() or result.stdout.strip() or "Unknown error"
+                    return await send(channel, f"⚠️ Claude failed:\n```\n{error_detail[:1500]}\n```")
+            else:
+                return await send(channel, f"⚠️ Error:\n```\n{error_detail[:1500]}\n```")
         await send(channel, result.stdout or "(empty)")
 
         # Auto-build web so iPhone users can see updates immediately
@@ -334,175 +591,219 @@ async def on_message(message: discord.Message):
 
     match cmd.name:
         case "help":
-            return await send(channel, help_text())
+            await send(channel, help_text())
 
         case "ls":
             keys = registry.list_keys()
             if keys:
-                return await send(channel, "**Workspaces:**\n" + "\n".join(f"  `{k}`" for k in keys))
-            return await send(channel, "No workspaces.")
+                view = WorkspaceSelectorView(message.author.id, keys)
+                await channel.send("**Workspaces:**", view=view)
+            else:
+                await send(channel, "No workspaces.")
 
         case "use":
             if not cmd.workspace:
-                return await send(channel, "Usage: `/use <workspace>`")
-            if registry.set_default(message.author.id, cmd.workspace):
-                return await send(channel, f"✅ Default → **{cmd.workspace}**")
-            return await send(channel, f"❌ Unknown: `{cmd.workspace}`")
+                await send(channel, "Usage: `/use <workspace>`")
+            elif registry.set_default(message.author.id, cmd.workspace):
+                await send(channel, f"✅ Default → **{cmd.workspace}**")
+            else:
+                await send(channel, f"❌ Unknown: `{cmd.workspace}`")
 
         case "where":
+            # Redundant with workspace footer, but keep for backwards compat
             ws = registry.get_default(message.author.id)
             if ws:
-                return await send(channel, f"📂 **{ws}** → `{registry.get_path(ws)}`")
-            return await send(channel, "No default set.")
+                await send(channel, f"📂 **{ws}** → `{registry.get_path(ws)}`")
+            else:
+                await send(channel, "No default set.")
 
         case "create":
             if not config.AGENT_MODE:
-                return await send(channel, "🔒 Agent mode OFF.")
-            if not cmd.app_name:
-                return await send(channel, "Usage: `/create <AppName>`")
-            result = await create_kmp_project(cmd.app_name, registry)
-            return await send(channel, result.message)
+                await send(channel, "🔒 Agent mode OFF.")
+            elif not cmd.app_name:
+                await send(channel, "Usage: `/create <AppName>`")
+            else:
+                result = await create_kmp_project(cmd.app_name, registry)
+                await send(channel, result.message)
 
         case "deleteapp":
             if not config.AGENT_MODE:
-                return await send(channel, "🔒 Agent mode OFF.")
-            if not cmd.workspace:
-                return await send(channel, "Usage: `/remove <workspace>`")
-            ws_key = cmd.workspace.lower()
-            ws_path = registry.get_path(ws_key)
-            if not ws_path:
-                return await send(channel, f"❌ Unknown workspace: `{ws_key}`")
-
-            view = ConfirmDeleteView(ws_key, ws_path, message.author.id)
-            await channel.send(
-                f"Delete **{ws_key}** (`{ws_path}`)?\nThis removes all files permanently.",
-                view=view,
-            )
-            return
+                await send(channel, "🔒 Agent mode OFF.")
+            elif not cmd.workspace:
+                await send(channel, "Usage: `/remove <workspace>`")
+            else:
+                ws_key = cmd.workspace.lower()
+                ws_path = registry.get_path(ws_key)
+                if not ws_path:
+                    await send(channel, f"❌ Unknown workspace: `{ws_key}`")
+                else:
+                    view = ConfirmDeleteView(ws_key, ws_path, message.author.id)
+                    await channel.send(
+                        f"Delete **{ws_key}** (`{ws_path}`)?\nThis removes all files permanently.",
+                        view=view,
+                    )
 
         case "rename":
             if not cmd.workspace or not cmd.arg:
-                return await send(channel, "Usage: `/rename <old-name> <new-name>`")
-            old_key = cmd.workspace.lower()
-            new_key = cmd.arg.lower()
-            if not registry.get_path(old_key):
-                return await send(channel, f"❌ Workspace `{old_key}` not found.")
-            if registry.get_path(new_key):
-                return await send(channel, f"❌ `{new_key}` already exists.")
-            if registry.rename(old_key, new_key):
-                return await send(channel, f"Renamed **{old_key}** → **{new_key}**")
-            return await send(channel, f"❌ Could not rename `{old_key}`.")
+                await send(channel, "Usage: `/rename <old-name> <new-name>`")
+            else:
+                old_key = cmd.workspace.lower()
+                new_key = cmd.arg.lower()
+                if not registry.get_path(old_key):
+                    await send(channel, f"❌ Workspace `{old_key}` not found.")
+                elif registry.get_path(new_key):
+                    await send(channel, f"❌ `{new_key}` already exists.")
+                elif registry.rename(old_key, new_key):
+                    await send(channel, f"Renamed **{old_key}** → **{new_key}**")
+                else:
+                    await send(channel, f"❌ Could not rename `{old_key}`.")
 
         case "buildapp":
             if not config.AGENT_MODE:
-                return await send(channel, "🔒 Agent mode OFF.")
-            async def ba_status(msg, fpath=None):
-                await send(channel, msg, file_path=fpath)
-            await buildapp.handle_buildapp(cmd.raw_cmd or "", registry, claude, ba_status)
+                await send(channel, "🔒 Agent mode OFF.")
+            else:
+                async def ba_status(msg, fpath=None):
+                    await send(channel, msg, file_path=fpath)
+                await buildapp.handle_buildapp(cmd.raw_cmd or "", registry, claude, ba_status)
 
         case "build":
             if not config.AGENT_MODE:
-                return await send(channel, "🔒 Agent mode OFF.")
-            ws_key, ws_path = registry.resolve(None, message.author.id)
-            if not ws_path:
-                return await send(channel, "❌ No workspace set.")
-            platform = cmd.platform or "android"
-            await send(channel, f"🔨 Building **{ws_key}** [{platform}]...")
-            result = await build_platform(platform, ws_path)
-            if result.success:
-                return await send(channel, f"✅ {platform.upper()} build succeeded.")
-            return await send(channel, f"❌ {platform.upper()} build failed:\n```\n{result.error[:1200]}\n```")
+                await send(channel, "🔒 Agent mode OFF.")
+            else:
+                ws_key, ws_path = registry.resolve(None, message.author.id)
+                if not ws_path:
+                    await send(channel, "❌ No workspace set.")
+                else:
+                    platform = cmd.platform or "android"
+                    await send(channel, f"🔨 Building **{ws_key}** [{platform}]...")
+                    await send(channel, STILL_LISTENING)
+                    result = await build_platform(platform, ws_path)
+                    if result.success:
+                        await send(channel, f"✅ {platform.upper()} build succeeded.")
+                    else:
+                        await send(channel, f"❌ {platform.upper()} build failed:\n```\n{result.error[:1200]}\n```")
 
         case "demo":
             if not config.AGENT_MODE:
-                return await send(channel, "🔒 Agent mode OFF.")
-            ws_key, ws_path = registry.resolve(None, message.author.id)
-            if not ws_path:
-                return await send(channel, "❌ No workspace set.")
-            platform = cmd.platform or "android"
-            await send(channel, f"📱 Demoing **{ws_key}** [{platform}]...")
-            result = await demo_platform(platform, ws_path)
-            msg = result.message
-            if result.demo_url:
-                msg += f"\n🔗 {result.demo_url}"
-            await send(channel, msg, file_path=result.screenshot_path)
+                await send(channel, "🔒 Agent mode OFF.")
+            else:
+                ws_key, ws_path = registry.resolve(None, message.author.id)
+                if not ws_path:
+                    await send(channel, "❌ No workspace set.")
+                elif cmd.platform:
+                    # /demo android, /demo ios, /demo web → run directly
+                    await _run_demo(channel, ws_key, ws_path, cmd.platform)
+                else:
+                    # /demo → show platform picker buttons
+                    view = DemoPlatformView(message.author.id, ws_key, ws_path)
+                    await channel.send(
+                        f"📱 Demo **{ws_key}** — pick a platform:", view=view)
 
         case "deploy":
             if not config.AGENT_MODE:
-                return await send(channel, "🔒 Agent mode OFF.")
-            ws_key, ws_path = registry.resolve(None, message.author.id)
-            if not ws_path:
-                return await send(channel, "❌ No workspace set.")
-            platform = cmd.platform or "ios"
-            await send(channel, f"📲 Deploying **{ws_key}** to {platform.upper()} device...")
-            if platform == "ios":
-                result = await deploy_ios(ws_path)
-            elif platform == "android":
-                result = await deploy_android(ws_path)
+                await send(channel, "🔒 Agent mode OFF.")
             else:
-                return await send(channel, f"❌ Deploy supports `ios` or `android`, not `{platform}`.")
-            return await send(channel, result.message)
+                ws_key, ws_path = registry.resolve(None, message.author.id)
+                if not ws_path:
+                    await send(channel, "❌ No workspace set.")
+                else:
+                    platform = cmd.platform or "ios"
+                    await send(channel, f"📲 Deploying **{ws_key}** to {platform.upper()} device...")
+                    if platform == "ios":
+                        result = await deploy_ios(ws_path)
+                        await send(channel, result.message)
+                    elif platform == "android":
+                        result = await deploy_android(ws_path)
+                        await send(channel, result.message)
+                    else:
+                        await send(channel, f"❌ Deploy supports `ios` or `android`, not `{platform}`.")
+
+        case "testflight":
+            if not config.AGENT_MODE:
+                await send(channel, "🔒 Agent mode OFF.")
+            else:
+                ws_key, ws_path = registry.resolve(None, message.author.id)
+                if not ws_path:
+                    await send(channel, "❌ No workspace set.")
+                else:
+                    async def tf_status(msg, fpath=None):
+                        await send(channel, msg, file_path=fpath)
+                    await handle_testflight(ws_key, ws_path, on_status=tf_status)
 
         case "vid":
             if not config.AGENT_MODE:
-                return await send(channel, "🔒 Agent mode OFF.")
-            ws_key, ws_path = registry.resolve(None, message.author.id)
-            if not ws_path:
-                return await send(channel, "❌ No workspace set.")
-            await send(channel, f"🎥 Recording **{ws_key}**...")
-            ok, msg = await AndroidPlatform.ensure_device()
-            if not ok:
-                return await send(channel, f"❌ {msg}")
-            result = await AndroidPlatform.build(ws_path)
-            if not result.success:
-                return await send(channel, f"❌ Build failed:\n```\n{result.error[:800]}\n```")
-            await AndroidPlatform.launch(ws_path)
-            video = await AndroidPlatform.record()
-            await send(channel, "✅ Recording captured.", file_path=video)
+                await send(channel, "🔒 Agent mode OFF.")
+            else:
+                ws_key, ws_path = registry.resolve(None, message.author.id)
+                if not ws_path:
+                    await send(channel, "❌ No workspace set.")
+                else:
+                    await send(channel, f"🎥 Recording **{ws_key}**...")
+                    ok, msg = await AndroidPlatform.ensure_device()
+                    if not ok:
+                        await send(channel, f"❌ {msg}")
+                    else:
+                        result = await AndroidPlatform.build(ws_path)
+                        if not result.success:
+                            await send(channel, f"❌ Build failed:\n```\n{result.error[:800]}\n```")
+                        else:
+                            await AndroidPlatform.launch(ws_path)
+                            video = await AndroidPlatform.record()
+                            await send(channel, "✅ Recording captured.", file_path=video)
 
         case "fix":
             if not config.AGENT_MODE:
-                return await send(channel, "🔒 Agent mode OFF.")
-            ws_key, ws_path = registry.resolve(None, message.author.id)
-            if not ws_path:
-                return await send(channel, "❌ No workspace set.")
-            async def fix_status(msg, fpath=None):
-                await send(channel, msg, file_path=fpath)
-            await fix.handle_fix(cmd.raw_cmd or "", ws_key, ws_path, claude,
-                                 on_status=fix_status)
+                await send(channel, "🔒 Agent mode OFF.")
+            else:
+                ws_key, ws_path = registry.resolve(None, message.author.id)
+                if not ws_path:
+                    await send(channel, "❌ No workspace set.")
+                else:
+                    await send(channel, STILL_LISTENING)
+                    async def fix_status(msg, fpath=None):
+                        await send(channel, msg, file_path=fpath)
+                    await fix.handle_fix(cmd.raw_cmd or "", ws_key, ws_path, claude,
+                                         on_status=fix_status)
 
         case "widget":
             if not config.AGENT_MODE:
-                return await send(channel, "🔒 Agent mode OFF.")
-            ws_key, ws_path = registry.resolve(None, message.author.id)
-            if not ws_path:
-                return await send(channel, "❌ No workspace set.")
-            async def widget_status(msg, fpath=None):
-                await send(channel, msg, file_path=fpath)
-            await widget.handle_widget(cmd.raw_cmd or "", ws_key, ws_path, claude,
-                                       on_status=widget_status)
+                await send(channel, "🔒 Agent mode OFF.")
+            else:
+                ws_key, ws_path = registry.resolve(None, message.author.id)
+                if not ws_path:
+                    await send(channel, "❌ No workspace set.")
+                else:
+                    async def widget_status(msg, fpath=None):
+                        await send(channel, msg, file_path=fpath)
+                    await widget.handle_widget(cmd.raw_cmd or "", ws_key, ws_path, claude,
+                                               on_status=widget_status)
 
         case "queue":
             if not config.AGENT_MODE:
-                return await send(channel, "🔒 Agent mode OFF.")
-            if not cmd.raw_cmd:
-                return await send(channel, "Usage: `/queue task1 --- task2 --- task3`")
-            ws_key, ws_path = registry.resolve(None, message.author.id)
-            if not ws_path:
-                return await send(channel, "❌ No workspace set.")
-            async def queue_status(msg, fpath=None):
-                await send(channel, msg, file_path=fpath)
-            await queue.handle_queue(
-                cmd.raw_cmd, ws_key, ws_path, claude, cost_tracker,
-                on_status=queue_status,
-            )
+                await send(channel, "🔒 Agent mode OFF.")
+            else:
+                ws_key, ws_path = registry.resolve(None, message.author.id)
+                if not ws_path:
+                    await send(channel, "❌ No workspace set.")
+                elif not cmd.raw_cmd:
+                    # Interactive wizard
+                    view = QueueBuilderView(message.author.id, channel, ws_key, ws_path)
+                    await channel.send(view.build_message(), view=view)
+                else:
+                    # Inline syntax: /queue task1 --- task2
+                    async def queue_status(msg, fpath=None):
+                        await send(channel, msg, file_path=fpath)
+                    await queue.handle_queue(
+                        cmd.raw_cmd, ws_key, ws_path, claude, cost_tracker,
+                        on_status=queue_status,
+                    )
 
         case "spend":
             spent = cost_tracker.today_spent()
             cap = config.DAILY_TOKEN_CAP_USD
             tasks = cost_tracker.today_tasks()
             remaining = max(0, cap * (config.QUEUE_STOP_PCT / 100.0) - spent)
-            return await send(channel, (
+            await send(channel, (
                 f"💰 **Daily Spend**\n"
                 f"  Today: ${spent:.4f}\n"
                 f"  Budget: ${cap:.2f} ({config.QUEUE_STOP_PCT}% cap)\n"
@@ -512,93 +813,163 @@ async def on_message(message: discord.Message):
 
         case "run":
             if not config.AGENT_MODE:
-                return await send(channel, "🔒 Agent mode OFF.")
-            ws_key, ws_path = registry.resolve(None, message.author.id)
-            if not ws_path:
-                return await send(channel, "❌ No workspace set.")
-            return await send(channel, await run_cmd.handle_run(cmd.raw_cmd or "", ws_path))
+                await send(channel, "🔒 Agent mode OFF.")
+            else:
+                ws_key, ws_path = registry.resolve(None, message.author.id)
+                if not ws_path:
+                    await send(channel, "❌ No workspace set.")
+                else:
+                    await send(channel, await run_cmd.handle_run(cmd.raw_cmd or "", ws_path))
 
         case "runsh":
             if not config.AGENT_MODE:
-                return await send(channel, "🔒 Agent mode OFF.")
-            ws_key, ws_path = registry.resolve(None, message.author.id)
-            if not ws_path:
-                return await send(channel, "❌ No workspace set.")
-            return await send(channel, await run_cmd.handle_runsh(cmd.raw_cmd or "", ws_path))
+                await send(channel, "🔒 Agent mode OFF.")
+            else:
+                ws_key, ws_path = registry.resolve(None, message.author.id)
+                if not ws_path:
+                    await send(channel, "❌ No workspace set.")
+                else:
+                    await send(channel, await run_cmd.handle_runsh(cmd.raw_cmd or "", ws_path))
 
         # ── Git & GitHub ─────────────────────────────────────────
         case "gitstatus":
             ws_key, ws_path = registry.resolve(None, message.author.id)
             if not ws_path:
-                return await send(channel, "❌ No workspace set.")
-            return await send(channel, await git_cmd.handle_status(ws_path, ws_key))
+                await send(channel, "❌ No workspace set.")
+            else:
+                await send(channel, await git_cmd.handle_status(ws_path, ws_key))
 
         case "diff":
             ws_key, ws_path = registry.resolve(None, message.author.id)
             if not ws_path:
-                return await send(channel, "❌ No workspace set.")
-            full = cmd.sub == "full" if cmd.sub else False
-            return await send(channel, await git_cmd.handle_diff(ws_path, full))
+                await send(channel, "❌ No workspace set.")
+            else:
+                full = cmd.sub == "full" if cmd.sub else False
+                await send(channel, await git_cmd.handle_diff(ws_path, full))
 
         case "commit":
             ws_key, ws_path = registry.resolve(None, message.author.id)
             if not ws_path:
-                return await send(channel, "❌ No workspace set.")
-            result = await git_cmd.handle_commit(
-                ws_path, ws_key, message=cmd.raw_cmd, claude=claude, auto_push=True)
-            return await send(channel, result)
+                await send(channel, "❌ No workspace set.")
+            else:
+                result = await git_cmd.handle_commit(
+                    ws_path, ws_key, message=cmd.raw_cmd, claude=claude, auto_push=True)
+                await send(channel, result)
 
         case "undo":
             ws_key, ws_path = registry.resolve(None, message.author.id)
             if not ws_path:
-                return await send(channel, "❌ No workspace set.")
-            return await send(channel, await git_cmd.handle_undo(ws_path))
+                await send(channel, "❌ No workspace set.")
+            else:
+                await send(channel, await git_cmd.handle_undo(ws_path))
 
         case "gitlog":
             ws_key, ws_path = registry.resolve(None, message.author.id)
             if not ws_path:
-                return await send(channel, "❌ No workspace set.")
-            count = int(cmd.raw_cmd) if cmd.raw_cmd and cmd.raw_cmd.isdigit() else 10
-            return await send(channel, await git_cmd.handle_log(ws_path, count))
+                await send(channel, "❌ No workspace set.")
+            else:
+                count = int(cmd.raw_cmd) if cmd.raw_cmd and cmd.raw_cmd.isdigit() else 10
+                await send(channel, await git_cmd.handle_log(ws_path, count))
 
         case "branch":
             ws_key, ws_path = registry.resolve(None, message.author.id)
             if not ws_path:
-                return await send(channel, "❌ No workspace set.")
-            return await send(channel, await git_cmd.handle_branch(ws_path, cmd.raw_cmd))
+                await send(channel, "❌ No workspace set.")
+            else:
+                await send(channel, await git_cmd.handle_branch(ws_path, cmd.raw_cmd))
 
         case "stash":
             ws_key, ws_path = registry.resolve(None, message.author.id)
             if not ws_path:
-                return await send(channel, "❌ No workspace set.")
-            return await send(channel, await git_cmd.handle_stash(ws_path, pop=(cmd.sub == "pop")))
+                await send(channel, "❌ No workspace set.")
+            else:
+                await send(channel, await git_cmd.handle_stash(ws_path, pop=(cmd.sub == "pop")))
 
         case "pr":
             ws_key, ws_path = registry.resolve(None, message.author.id)
             if not ws_path:
-                return await send(channel, "❌ No workspace set.")
-            return await send(channel, await git_cmd.handle_pr(
-                ws_path, ws_key, title=cmd.raw_cmd, claude=claude))
+                await send(channel, "❌ No workspace set.")
+            else:
+                await send(channel, await git_cmd.handle_pr(
+                    ws_path, ws_key, title=cmd.raw_cmd, claude=claude))
 
         case "repo":
             ws_key, ws_path = registry.resolve(None, message.author.id)
             if not ws_path:
-                return await send(channel, "❌ No workspace set.")
-            return await send(channel, await git_cmd.handle_repo(
-                ws_path, ws_key, sub=cmd.sub, arg=cmd.arg))
+                await send(channel, "❌ No workspace set.")
+            else:
+                await send(channel, await git_cmd.handle_repo(
+                    ws_path, ws_key, sub=cmd.sub, arg=cmd.arg))
 
         case "mirror":
             if not config.AGENT_MODE:
-                return await send(channel, "🔒 Agent mode OFF.")
-            from commands.scrcpy import handle_mirror
-            return await send(channel, await handle_mirror(cmd.sub or "start"))
+                await send(channel, "🔒 Agent mode OFF.")
+            else:
+                from commands.scrcpy import handle_mirror
+                await send(channel, await handle_mirror(cmd.sub or "start"))
 
         case "memory":
             ws_key, ws_path = registry.resolve(None, message.author.id)
             if not ws_path:
-                return await send(channel, "❌ No workspace set.")
-            return await send(channel, memory_cmd.handle_memory(
-                cmd.sub, cmd.arg, ws_path, ws_key))
+                await send(channel, "❌ No workspace set.")
+            else:
+                await send(channel, memory_cmd.handle_memory(
+                    cmd.sub, cmd.arg, ws_path, ws_key))
+
+        case "fixes":
+            ws_key, ws_path = registry.resolve(None, message.author.id)
+            if not ws_path:
+                await send(channel, "❌ No workspace set.")
+            else:
+                await send(channel, fixes_cmd.handle_fixes(
+                    cmd.sub, ws_path, ws_key))
+
+        case "setup":
+            import shutil
+            checks = []
+
+            # Claude
+            claude_path = shutil.which(config.CLAUDE_BIN)
+            checks.append(f"{'✅' if claude_path else '❌'} **Claude CLI** — `{claude_path or 'not found'}`")
+
+            # Android
+            adb_path = shutil.which(config.ADB_BIN)
+            has_avd = bool(config.ANDROID_AVD)
+            checks.append(f"{'✅' if adb_path else '❌'} **Android SDK** — adb: `{adb_path or 'not found'}`")
+            checks.append(f"{'✅' if has_avd else '⚠️'} **Android AVD** — `{config.ANDROID_AVD or 'not set (set ANDROID_AVD in .env)'}`")
+
+            # iOS
+            xcode_path = shutil.which(config.XCODEBUILD)
+            checks.append(f"{'✅' if xcode_path else '❌'} **Xcode** — `{xcode_path or 'not found (install from App Store)'}`")
+            checks.append(f"  Simulator: `{config.IOS_SIMULATOR_NAME}`")
+
+            # TestFlight
+            has_tf = bool(config.APPLE_TEAM_ID and config.ASC_KEY_ID and config.ASC_ISSUER_ID)
+            if has_tf:
+                checks.append(f"✅ **TestFlight** — Team: `{config.APPLE_TEAM_ID}`")
+            else:
+                missing_tf = []
+                if not config.APPLE_TEAM_ID:
+                    missing_tf.append("APPLE_TEAM_ID")
+                if not config.ASC_KEY_ID:
+                    missing_tf.append("ASC_KEY_ID")
+                if not config.ASC_ISSUER_ID:
+                    missing_tf.append("ASC_ISSUER_ID")
+                checks.append(f"❌ **TestFlight** — missing: `{', '.join(missing_tf)}`")
+
+            # Web
+            checks.append(f"✅ **Web** — port `{config.WEB_SERVE_PORT}`")
+
+            # Tailscale
+            if config.TAILSCALE_HOSTNAME:
+                checks.append(f"✅ **Tailscale** — `{config.TAILSCALE_HOSTNAME}`")
+            else:
+                checks.append(f"⚠️ **Tailscale** — not set (optional, for remote access)")
+
+            # Agent mode
+            checks.append(f"{'✅' if config.AGENT_MODE else '❌'} **Agent mode** — {'ON' if config.AGENT_MODE else 'OFF (set AGENT_MODE=1 in .env)'}")
+
+            await send(channel, "**Setup Status**\n\n" + "\n".join(checks))
 
         case "health":
             uptime = int(time.time() - START_TIME)
@@ -606,7 +977,7 @@ async def on_message(message: discord.Message):
             h, m = divmod(m, 60)
             ws = registry.get_default(message.author.id) or "(none)"
             sess = claude.get_session(ws) or "(none)"
-            return await send(channel, (
+            await send(channel, (
                 f"**Health**\n"
                 f"  Uptime: {h}h {m}m {s}s\n"
                 f"  Workspace: {ws}\n"
@@ -621,32 +992,59 @@ async def on_message(message: discord.Message):
             os.system("pm2 restart discord-claude-bridge")
 
         case "patch-bot":
-            return await send(channel,
-                "`/patch-bot` is retired. Use `/bot-todo <note>` to track bot improvements.")
+            pass  # retired
 
         case "bot-todo":
-            return await send(channel, handle_bot_todo(cmd.raw_cmd))
+            await send(channel, handle_bot_todo(cmd.raw_cmd))
 
         case "dashboard":
             if not config.AGENT_MODE:
-                return await send(channel, "🔒 Agent mode OFF.")
-            async def dash_status(msg, fpath=None):
-                await send(channel, msg, file_path=fpath)
-            await handle_dashboard(
-                registry, dash_status, rebuild=(cmd.sub == "rebuild"),
-            )
+                await send(channel, "🔒 Agent mode OFF.")
+            else:
+                async def dash_status(msg, fpath=None):
+                    await send(channel, msg, file_path=fpath)
+                await handle_dashboard(
+                    registry, dash_status, rebuild=(cmd.sub == "rebuild"),
+                )
 
         case "newsession":
             ws_key = registry.get_default(message.author.id)
             if ws_key:
                 claude.clear_session(ws_key)
-                return await send(channel, f"🔄 Fresh session for **{ws_key}**.")
-            return await send(channel, "❌ No workspace set.")
+                await send(channel, f"🔄 Fresh session for **{ws_key}**.")
+            else:
+                await send(channel, "❌ No workspace set.")
+
+        case "maintenance":
+            if cmd.raw_cmd and cmd.raw_cmd.lower() == "off":
+                maintenance_mode = False
+                await send(channel, "✅ Maintenance mode **OFF** — public commands are live.")
+            else:
+                maintenance_mode = True
+                if cmd.raw_cmd:
+                    maintenance_message = f"🔧 {cmd.raw_cmd}"
+                else:
+                    maintenance_message = "🔧 Bot is under maintenance — back shortly!"
+                await send(channel, f"🔧 Maintenance mode **ON**\nPublic users see: *{maintenance_message}*")
+
+        case "announce":
+            if not cmd.raw_cmd:
+                await send(channel, "Usage: `/announce <message>`")
+            else:
+                # Send to announce channel if configured, otherwise just echo in current DM
+                target = None
+                if config.DISCORD_ANNOUNCE_CHANNEL_ID:
+                    target = client.get_channel(config.DISCORD_ANNOUNCE_CHANNEL_ID)
+                if target:
+                    await target.send(f"📢 {cmd.raw_cmd}")
+                    await send(channel, f"✅ Announced in #{target.name}")
+                else:
+                    await send(channel, f"📢 {cmd.raw_cmd}")
 
         case "unknown":
-            return await send(channel, "❓ Unknown command. `/help`")
+            await send(channel, "❓ Unknown command. `/help`")
 
-    # Workspace footer — reminds user which workspace they're in + switch button
+    # Workspace footer — always show after every command
     await send_workspace_footer(channel, message.author.id)
 
 

@@ -45,6 +45,7 @@ async def handle_queue(
         f"  Already spent today: ${cost_tracker.today_spent():.2f}",
         None,
     )
+    await on_status("💡 *I'm still listening — feel free to send other commands while this runs.*", None)
 
     completed = 0
     failed = 0

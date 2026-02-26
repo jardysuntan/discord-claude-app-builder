@@ -13,6 +13,7 @@ class WorkspaceRegistry:
     def __init__(self):
         self._workspaces: dict[str, str] = {}
         self._user_defaults: dict[int, str] = {}
+        self._defaults_path = Path(config.WORKSPACES_PATH).parent / "user_defaults.json"
         self.reload()
         self._global_default = config.DEFAULT_WORKSPACE or None
 
@@ -23,6 +24,14 @@ class WorkspaceRegistry:
                 self._workspaces = json.load(f)
         else:
             self._workspaces = {}
+        # Load persisted user defaults
+        if self._defaults_path.exists():
+            try:
+                with open(self._defaults_path) as f:
+                    raw = json.load(f)
+                self._user_defaults = {int(k): v for k, v in raw.items()}
+            except (json.JSONDecodeError, ValueError):
+                self._user_defaults = {}
 
     def list_keys(self) -> list[str]:
         return sorted(self._workspaces.keys())
@@ -56,12 +65,14 @@ class WorkspaceRegistry:
         if self._global_default == old_key:
             self._global_default = new_key
         self._save()
+        self._save_defaults()
         return True
 
     def set_default(self, user_id: int, key: str) -> bool:
         if not self.exists(key):
             return False
         self._user_defaults[user_id] = key.lower()
+        self._save_defaults()
         return True
 
     def get_default(self, user_id: int) -> Optional[str]:
@@ -77,3 +88,7 @@ class WorkspaceRegistry:
     def _save(self):
         with open(config.WORKSPACES_PATH, "w") as f:
             json.dump(self._workspaces, f, indent=2)
+
+    def _save_defaults(self):
+        with open(self._defaults_path, "w") as f:
+            json.dump({str(k): v for k, v in self._user_defaults.items()}, f, indent=2)

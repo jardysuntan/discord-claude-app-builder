@@ -78,10 +78,14 @@ def parse(text: str) -> ParseResult:
                 return Command(name="where")
 
             # ── Build & run ──────────────────────────────────────────
-            case "/buildapp":
+            case "/buildapp" | "/build-app":
                 return Command(name="buildapp", raw_cmd=rest or None)
 
             case "/build":
+                # "/build app <desc>" is an alias for "/buildapp <desc>"
+                if rest and rest.lower().startswith("app"):
+                    buildapp_rest = rest[3:].strip()
+                    return Command(name="buildapp", raw_cmd=buildapp_rest or None)
                 platform, remainder = _parse_platform(rest)
                 return Command(name="build", platform=platform or "all")
 
@@ -99,11 +103,14 @@ def parse(text: str) -> ParseResult:
 
             case "/demo":
                 platform, _ = _parse_platform(rest)
-                return Command(name="demo", platform=platform or "android")
+                return Command(name="demo", platform=platform)
 
             case "/deploy":
                 platform, _ = _parse_platform(rest)
                 return Command(name="deploy", platform=platform or "ios")
+
+            case "/testflight":
+                return Command(name="testflight")
 
             case "/vid" | "/viddemo":
                 return Command(name="vid", platform="android")
@@ -171,6 +178,10 @@ def parse(text: str) -> ParseResult:
                 sub = mem_parts[0].lower() if mem_parts else None
                 arg = mem_parts[1] if len(mem_parts) > 1 else None
                 return Command(name="memory", sub=sub, arg=arg)
+            case "/fixes":
+                return Command(name="fixes", sub=rest.lower().strip() if rest else None)
+            case "/setup":
+                return Command(name="setup")
             case "/health":
                 return Command(name="health")
             case "/reload":
@@ -183,6 +194,10 @@ def parse(text: str) -> ParseResult:
                 return Command(name="dashboard", sub=rest.lower().strip() if rest else None)
             case "/newsession":
                 return Command(name="newsession")
+            case "/maintenance":
+                return Command(name="maintenance", raw_cmd=rest or None)
+            case "/announce":
+                return Command(name="announce", raw_cmd=rest or None)
             case _:
                 return Command(name="unknown", raw_cmd=text)
 

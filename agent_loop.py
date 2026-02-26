@@ -10,6 +10,7 @@ from typing import Optional, Callable, Awaitable
 
 import config
 from claude_runner import ClaudeRunner
+from commands.fixes_cmd import log_fix, get_recent_fixes
 from platforms import build_platform, extract_build_error
 
 
@@ -59,20 +60,38 @@ async def run_agent_loop(
     attempts: list[BuildAttempt] = []
     last_error = ""
 
-    # Step 1: Initial Claude prompt
-    if on_status:
-        await on_status("🧠 Sending prompt to Claude...")
+    # Step 1: Initial Claude prompt (with retry)
+    max_claude_retries = 2
+    initial_result = None
 
-    initial_result = await claude.run(
-        initial_prompt, workspace_key, workspace_path,
-        on_progress=on_status,
-    )
+    for claude_try in range(1, max_claude_retries + 1):
+        if on_status:
+            label = "🧠 Sending prompt to Claude..."
+            if claude_try > 1:
+                label = f"🔄 Retrying Claude (attempt {claude_try}/{max_claude_retries})..."
+            await on_status(label)
+
+        initial_result = await claude.run(
+            initial_prompt, workspace_key, workspace_path,
+            on_progress=on_status,
+        )
+
+        if initial_result.exit_code == 0:
+            break
+
+        # On failure, clear session and retry
+        error_detail = initial_result.stderr.strip() or initial_result.stdout.strip() or "No error details"
+        if on_status and claude_try < max_claude_retries:
+            await on_status(f"⚠️ Claude failed (attempt {claude_try}): {error_detail[:200]}\nRetrying...")
+        claude.clear_session(workspace_key)
+        await asyncio.sleep(2)
 
     if initial_result.exit_code != 0:
+        error_detail = initial_result.stderr.strip() or initial_result.stdout.strip() or "Unknown error (no output)"
         return AgentLoopResult(
             success=False, total_attempts=0,
             total_duration_secs=time.time() - loop_start,
-            final_message=f"Claude failed:\n```\n{initial_result.stderr[:1000]}\n```",
+            final_message=f"Claude failed after {max_claude_retries} attempts:\n```\n{error_detail[:1000]}\n```",
         )
 
     if on_status:
@@ -125,14 +144,32 @@ async def run_agent_loop(
                 f"```\n{error_snippet[:300]}\n```"
             )
 
+        sim_hint = ""
+        if platform == "ios":
+            sim_hint = f"IMPORTANT: When running xcodebuild, always use: -destination 'name={config.IOS_SIMULATOR_NAME}'\n"
+
+        fixes_context = get_recent_fixes(workspace_path)
+        past_fixes = f"Previous fixes for this project:\n{fixes_context}\n\n" if fixes_context else ""
+
         fix_prompt = (
+            f"{past_fixes}"
             f"The {platform} build failed. Fix the code so it compiles.\n"
-            f"Only modify what's necessary.\n\n```\n{error_snippet}\n```"
+            f"Only modify what's necessary.\n{sim_hint}\n```\n{error_snippet}\n```"
         )
-        fix_result = await claude.run(
-            fix_prompt, workspace_key, workspace_path,
-            on_progress=on_status,
-        )
+
+        # Try fix with retry on Claude failure
+        fix_result = None
+        for fix_try in range(1, 3):
+            fix_result = await claude.run(
+                fix_prompt, workspace_key, workspace_path,
+                on_progress=on_status,
+            )
+            if fix_result.exit_code == 0:
+                break
+            claude.clear_session(workspace_key)
+            if fix_try < 2 and on_status:
+                await on_status("⚠️ Claude failed on fix, retrying...")
+            await asyncio.sleep(2)
 
         attempts.append(BuildAttempt(
             attempt=attempt_num, success=False,
@@ -141,12 +178,20 @@ async def run_agent_loop(
             claude_fix_summary=(fix_result.stdout[:300] if fix_result.stdout else ""),
         ))
 
+        if fix_result.exit_code == 0:
+            try:
+                log_fix(workspace_path, platform, error_snippet[:300],
+                        fix_result.stdout[:300] if fix_result.stdout else "Applied fix")
+            except Exception:
+                pass  # don't break the build loop over logging
+
         if fix_result.exit_code != 0:
+            error_detail = fix_result.stderr.strip() or fix_result.stdout.strip() or "Unknown error"
             return AgentLoopResult(
                 success=False, total_attempts=attempt_num,
                 total_duration_secs=time.time() - loop_start,
                 attempts=attempts,
-                final_message=f"🛑 Claude errored on fix:\n```\n{fix_result.stderr[:500]}\n```",
+                final_message=f"🛑 Claude errored on fix:\n```\n{error_detail[:500]}\n```",
             )
 
     return AgentLoopResult(

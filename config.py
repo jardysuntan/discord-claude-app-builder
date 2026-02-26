@@ -14,6 +14,8 @@ load_dotenv()
 DISCORD_BOT_TOKEN: str = os.getenv("DISCORD_BOT_TOKEN", "")
 DISCORD_ALLOWED_USER_ID: int = int(os.getenv("DISCORD_ALLOWED_USER_ID", "0"))
 
+DISCORD_ANNOUNCE_CHANNEL_ID: int = int(os.getenv("DISCORD_ANNOUNCE_CHANNEL_ID", "0"))
+
 # ── Workspaces ───────────────────────────────────────────────────────────────
 WORKSPACES_PATH: str = os.getenv("WORKSPACES_PATH", "./workspaces.json")
 DEFAULT_WORKSPACE: str = os.getenv("DEFAULT_WORKSPACE", "")
@@ -37,8 +39,14 @@ ANDROID_AVD: str = os.getenv("ANDROID_AVD", "")
 # ── iOS ──────────────────────────────────────────────────────────────────────
 XCODEBUILD: str = os.getenv("XCODEBUILD", "xcodebuild")
 XCRUN: str = os.getenv("XCRUN", "xcrun")
-IOS_SIMULATOR_NAME: str = os.getenv("IOS_SIMULATOR_NAME", "iPhone 16")
-IOS_SIMULATOR_RUNTIME: str = os.getenv("IOS_SIMULATOR_RUNTIME", "iOS-18-0")
+IOS_SIMULATOR_NAME: str = os.getenv("IOS_SIMULATOR_NAME", "iPhone 17 Pro Max")
+IOS_SIMULATOR_RUNTIME: str = os.getenv("IOS_SIMULATOR_RUNTIME", "iOS-26-2")
+
+# ── App Store Connect (TestFlight) ───────────────────────────────────────────
+APPLE_TEAM_ID: str = os.getenv("APPLE_TEAM_ID", "")
+ASC_KEY_ID: str = os.getenv("ASC_KEY_ID", "")
+ASC_ISSUER_ID: str = os.getenv("ASC_ISSUER_ID", "")
+ASC_KEY_PATH: str = os.getenv("ASC_KEY_PATH", "")
 
 # ── Web ──────────────────────────────────────────────────────────────────────
 WEB_SERVE_PORT: int = int(os.getenv("WEB_SERVE_PORT", "9000"))
@@ -60,7 +68,7 @@ QUEUE_STOP_PCT: int = int(os.getenv("QUEUE_STOP_PCT", "90"))
 # ── Limits ───────────────────────────────────────────────────────────────────
 MAX_DISCORD_MSG_LEN: int = 1900
 SCREEN_RECORD_SECONDS: int = int(os.getenv("SCREEN_RECORD_SECONDS", "15"))
-MAX_BUILD_ATTEMPTS: int = int(os.getenv("MAX_BUILD_ATTEMPTS", "4"))
+MAX_BUILD_ATTEMPTS: int = int(os.getenv("MAX_BUILD_ATTEMPTS", "8"))
 
 
 def validate() -> list[str]:
@@ -84,3 +92,4 @@ def print_config_summary():
     print(f"  iOS Simulator:   {IOS_SIMULATOR_NAME}")
     print(f"  Web port:        {WEB_SERVE_PORT}")
     print(f"  Tailscale:       {TAILSCALE_HOSTNAME or '(not set)'}")
+    print(f"  TestFlight:      {'configured' if APPLE_TEAM_ID and ASC_KEY_ID else 'not configured'}")

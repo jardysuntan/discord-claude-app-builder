@@ -231,6 +231,7 @@ class iOSPlatform:
         if not ios_dir.exists():
             return BuildResult(success=False, output="", error="No iosApp/ directory found.")
 
+        derived_data = Path(workspace_path) / "build" / "ios-simulator"
         rc, out, err = await _run([
             config.XCODEBUILD,
             "-project", str(ios_dir / "iosApp.xcodeproj"),
@@ -238,6 +239,7 @@ class iOSPlatform:
             "-sdk", "iphonesimulator",
             "-destination", f"name={config.IOS_SIMULATOR_NAME}",
             "-configuration", "Debug",
+            "-derivedDataPath", str(derived_data),
             "build",
         ], cwd=workspace_path, timeout=300)
         raw = out + err
@@ -248,25 +250,37 @@ class iOSPlatform:
     @staticmethod
     async def install_and_launch(workspace_path: str) -> str:
         """Find the built .app and install it on the simulator."""
-        # Find the built app bundle
-        build_dir = Path(workspace_path) / "iosApp" / "build"
         app_path = None
-        for p in build_dir.rglob("*.app"):
-            app_path = p
-            break
 
+        # Check known derivedData path first (set by build())
+        derived_data = Path(workspace_path) / "build" / "ios-simulator"
+        products = derived_data / "Build" / "Products"
+        if products.exists():
+            for p in products.rglob("*.app"):
+                if "Debug-iphonesimulator" in str(p):
+                    app_path = p
+                    break
+            if not app_path:
+                for p in products.rglob("*.app"):
+                    app_path = p
+                    break
+
+        # Fallback: check default DerivedData
         if not app_path:
-            # Try DerivedData
             derived = Path.home() / "Library" / "Developer" / "Xcode" / "DerivedData"
             for p in derived.rglob("iosApp.app"):
-                app_path = p
-                break
+                if "Debug-iphonesimulator" in str(p):
+                    app_path = p
+                    break
 
         if not app_path:
             return "Could not find built .app bundle."
 
         # Install
-        await _run([config.XCRUN, "simctl", "install", "booted", str(app_path)])
+        rc, out, err = await _run([config.XCRUN, "simctl", "install", "booted", str(app_path)])
+        if rc != 0:
+            return f"Install failed: {(out + err)[:200]}"
+
         # Launch — need bundle ID
         bundle_id = await iOSPlatform._get_bundle_id(app_path)
         if bundle_id:
@@ -286,6 +300,32 @@ class iOSPlatform:
             if rc == 0:
                 return out.strip()
         return None
+
+    @staticmethod
+    async def check_crash(bundle_id: str) -> Optional[str]:
+        """Check if the app crashed after launch. Returns crash log snippet or None if running."""
+        # Check if the app process is still running on the simulator
+        rc, out, _ = await _run([config.XCRUN, "simctl", "spawn", "booted", "launchctl", "list"])
+        if rc == 0 and bundle_id in out:
+            return None  # still running
+
+        # App not running — grab most recent crash log
+        import glob as glob_mod
+        crash_dir = Path.home() / "Library" / "Logs" / "DiagnosticReports"
+        app_name = bundle_id.split(".")[-1]
+        candidates = []
+        for pattern in [f"*{app_name}*", "*.ips"]:
+            candidates.extend(glob_mod.glob(str(crash_dir / pattern)))
+        if not candidates:
+            return "App crashed on launch (no crash log found). Check startup code for runtime errors."
+
+        # Most recent crash file
+        candidates.sort(key=lambda f: Path(f).stat().st_mtime, reverse=True)
+        try:
+            content = Path(candidates[0]).read_text(errors="replace")
+            return content[:1500]
+        except Exception:
+            return "App crashed on launch (could not read crash log)."
 
     @staticmethod
     async def screenshot() -> Optional[str]:
@@ -325,6 +365,84 @@ class iOSPlatform:
             message=f"✅ **{bundle_id}** running on iOS Simulator.",
             screenshot_path=screenshot,
         )
+
+    # ── TestFlight helpers ────────────────────────────────────────────────
+
+    @staticmethod
+    def parse_bundle_id(workspace_path: str) -> Optional[str]:
+        """Extract PRODUCT_BUNDLE_IDENTIFIER from Config.xcconfig."""
+        xcconfig = Path(workspace_path) / "iosApp" / "Configuration" / "Config.xcconfig"
+        if not xcconfig.exists():
+            return None
+        text = xcconfig.read_text()
+        m = re.search(r'PRODUCT_BUNDLE_IDENTIFIER\s*=\s*(.+)', text)
+        if m:
+            return m.group(1).strip()
+        return None
+
+    @staticmethod
+    def set_team_id(workspace_path: str, team_id: str) -> bool:
+        """Set TEAM_ID in Config.xcconfig."""
+        xcconfig = Path(workspace_path) / "iosApp" / "Configuration" / "Config.xcconfig"
+        if not xcconfig.exists():
+            return False
+        text = xcconfig.read_text()
+        text = re.sub(r'TEAM_ID\s*=\s*.*', f'TEAM_ID={team_id}', text)
+        xcconfig.write_text(text)
+        return True
+
+    @staticmethod
+    def set_build_number(workspace_path: str, build_number: int) -> bool:
+        """Update CURRENT_PROJECT_VERSION in Config.xcconfig."""
+        xcconfig = Path(workspace_path) / "iosApp" / "Configuration" / "Config.xcconfig"
+        if not xcconfig.exists():
+            return False
+        text = xcconfig.read_text()
+        text = re.sub(r'CURRENT_PROJECT_VERSION\s*=\s*\d+',
+                      f'CURRENT_PROJECT_VERSION={build_number}', text)
+        xcconfig.write_text(text)
+        return True
+
+    @staticmethod
+    async def archive(workspace_path: str, team_id: str) -> BuildResult:
+        """Build KMP release framework + create Xcode archive for distribution."""
+        # Stage 1: Gradle release framework for arm64
+        rc, out, err = await _run(
+            ["./gradlew", "composeApp:linkReleaseFrameworkIosArm64"],
+            cwd=workspace_path, timeout=600,
+        )
+        if rc != 0:
+            raw = out + err
+            return BuildResult(success=False, output=raw, error=extract_build_error(raw))
+
+        # Stage 2: xcodebuild archive
+        ios_dir = Path(workspace_path) / "iosApp"
+        if not ios_dir.exists():
+            return BuildResult(success=False, output="", error="No iosApp/ directory found.")
+
+        archive_path = Path(workspace_path) / "build" / "iosApp.xcarchive"
+        # Clean previous archive
+        if archive_path.exists():
+            import shutil
+            shutil.rmtree(archive_path)
+
+        rc, out, err = await _run([
+            config.XCODEBUILD,
+            "-project", str(ios_dir / "iosApp.xcodeproj"),
+            "-scheme", "iosApp",
+            "-sdk", "iphoneos",
+            "-configuration", "Release",
+            "-archivePath", str(archive_path),
+            f"CODE_SIGN_STYLE=Automatic",
+            f"DEVELOPMENT_TEAM={team_id}",
+            "-allowProvisioningUpdates",
+            "archive",
+        ], cwd=workspace_path, timeout=600)
+
+        raw = out + err
+        if rc == 0 and archive_path.exists():
+            return BuildResult(success=True, output=str(archive_path))
+        return BuildResult(success=False, output=raw, error=extract_build_error(raw))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -560,6 +678,78 @@ async def deploy_android(workspace_path: str) -> DeployResult:
 
     app_id = AndroidPlatform.parse_app_id(workspace_path) or "the app"
     return DeployResult(True, f"✅ **{app_id}** installed on your Android device.\nOpen it on your phone!")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TESTFLIGHT — archive, export IPA, upload
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def export_ipa(archive_path: str, workspace_path: str, team_id: str) -> tuple[bool, str, str]:
+    """Export IPA from xcarchive. Returns (success, ipa_path_or_error, raw_output)."""
+    export_dir = Path(workspace_path) / "build" / "ipa"
+    if export_dir.exists():
+        import shutil
+        shutil.rmtree(export_dir)
+    export_dir.mkdir(parents=True, exist_ok=True)
+
+    # Generate ExportOptions.plist
+    plist_path = Path(workspace_path) / "build" / "ExportOptions.plist"
+    plist_path.write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"'
+        ' "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+        '<plist version="1.0">\n<dict>\n'
+        '    <key>method</key>\n    <string>app-store</string>\n'
+        f'    <key>teamID</key>\n    <string>{team_id}</string>\n'
+        '    <key>signingStyle</key>\n    <string>automatic</string>\n'
+        '    <key>uploadSymbols</key>\n    <true/>\n'
+        '    <key>destination</key>\n    <string>export</string>\n'
+        '</dict>\n</plist>\n'
+    )
+
+    rc, out, err = await _run([
+        config.XCODEBUILD,
+        "-exportArchive",
+        "-archivePath", archive_path,
+        "-exportOptionsPlist", str(plist_path),
+        "-exportPath", str(export_dir),
+        "-allowProvisioningUpdates",
+    ], timeout=300)
+
+    raw = out + err
+    if rc != 0:
+        return False, extract_build_error(raw), raw
+
+    # Find the .ipa file
+    ipas = list(export_dir.glob("*.ipa"))
+    if ipas:
+        return True, str(ipas[0]), raw
+    return False, "Archive exported but no .ipa found", raw
+
+
+async def testflight_upload(ipa_path: str, key_id: str, issuer_id: str) -> DeployResult:
+    """Upload IPA to App Store Connect / TestFlight."""
+    rc, out, err = await _run([
+        config.XCRUN, "altool",
+        "--upload-app",
+        "-f", ipa_path,
+        "-t", "ios",
+        "--apiKey", key_id,
+        "--apiIssuer", issuer_id,
+    ], timeout=600)
+
+    raw = out + err
+    if rc == 0:
+        return DeployResult(True, "Upload to TestFlight succeeded.")
+    if "No suitable application records" in raw:
+        return DeployResult(False,
+            "❌ No app record found in App Store Connect.\n"
+            "Create one at https://appstoreconnect.apple.com with the matching bundle ID.")
+    if "Unable to authenticate" in raw or "auth" in raw.lower():
+        return DeployResult(False,
+            "❌ Authentication failed. Check ASC_KEY_ID, ASC_ISSUER_ID, "
+            "and that your .p8 file is at ~/.private_keys/AuthKey_<KEY_ID>.p8")
+    return DeployResult(False, f"❌ Upload failed:\n```\n{raw[:800]}\n```")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

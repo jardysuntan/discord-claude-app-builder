@@ -61,6 +61,7 @@ async def handle_buildapp(
 
     # 1. Scaffold
     await on_status(f"🏗️ Creating **{app_name}** (Kotlin Multiplatform)...", None)
+    await on_status("💡 *I'm still listening — feel free to send other commands while this runs.*", None)
     scaffold_result = await create_kmp_project(app_name, registry)
     await on_status(scaffold_result.message, None)
 
@@ -140,11 +141,32 @@ async def handle_buildapp(
             None,
         )
 
-    # 5. iOS build (if on Mac with Xcode)
-    await on_status("🍎 **iOS** — building for simulator...", None)
-    ios_demo = await iOSPlatform.full_demo(ws_path)
-    if ios_demo.success:
-        await on_status(ios_demo.message, ios_demo.screenshot_path)
+    # 5. iOS build + auto-fix (same as web)
+    await on_status("🍎 **iOS** — building and fixing simulator version...", None)
+    ios_loop = await run_agent_loop(
+        initial_prompt=(
+            "The Android target compiles. Now ensure the iOS target "
+            "also compiles. Fix any iOS-specific issues. "
+            "Only modify what's necessary for iOS compatibility. "
+            f"IMPORTANT: When running xcodebuild, always use: -destination 'name={config.IOS_SIMULATOR_NAME}'"
+        ),
+        workspace_key=slug,
+        workspace_path=ws_path,
+        claude=claude,
+        platform="ios",
+        on_status=loop_status,
+    )
+    ios_loop_summary = format_loop_summary(ios_loop)
+    await on_status(ios_loop_summary, None)
+
+    ios_demo = None
+    if ios_loop.success:
+        await on_status("📱 Launching iOS demo...", None)
+        ios_demo = await iOSPlatform.full_demo(ws_path)
+        if ios_demo.success:
+            await on_status(ios_demo.message, ios_demo.screenshot_path)
+        else:
+            await on_status("✅ iOS builds but demo failed.", None)
     else:
         await on_status(
             f"⚠️ iOS build had issues. Use `@{slug} Fix the iOS target` to resolve.",
@@ -155,12 +177,13 @@ async def handle_buildapp(
     elapsed = int(time.time() - start_time)
     mins, secs = divmod(elapsed, 60)
 
-    build_attempts = loop_result.total_attempts + web_loop.total_attempts
+    build_attempts = loop_result.total_attempts + web_loop.total_attempts + ios_loop.total_attempts
 
     platform_status = []
     platform_status.append(f"  📱 Android: {'✅' if loop_result.success else '❌'}")
     platform_status.append(f"  🌐 Web: {'✅ ' + (web_demo_url or '') if web_loop.success else '❌'}")
-    platform_status.append(f"  🍎 iOS: {'✅' if ios_demo.success else '❌'}")
+    ios_ok = ios_demo.success if ios_demo else False
+    platform_status.append(f"  🍎 iOS: {'✅' if ios_ok else '❌'}")
 
     await on_status(
         f"🎉 **{app_name}** built!\n\n"

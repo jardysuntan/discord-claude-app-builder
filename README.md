@@ -26,7 +26,8 @@ You DM the bot something like `/buildapp a habit tracker with streaks`. Behind t
 3. The bot builds for Android — if it fails, Claude reads the errors and fixes them (up to 4 attempts)
 4. Once it compiles, you get a screenshot and video from the Android emulator
 5. It builds for Web (WASM) and gives you a link to play with the app in your browser
-6. It attempts an iOS simulator build if Xcode is available
+6. It builds for iOS — if it fails, Claude fixes those too (up to 4 attempts)
+7. `/testflight` uploads to TestFlight so anyone can install it natively
 
 The whole thing takes a few minutes. You get real-time progress updates in Discord as Claude reads files, writes code, and runs commands.
 
@@ -131,11 +132,12 @@ This scaffolds, builds, and demos everything. You'll get screenshots, a video, a
 
 | Command | What it does |
 |---------|-------------|
-| `/buildapp <description>` | Full pipeline: scaffold + build + demo all platforms |
+| `/build app <description>` | Full pipeline: scaffold + build + demo all platforms |
 | `/create <AppName>` | Just scaffold a KMP project |
 | `/build android\|ios\|web` | Build for a specific platform |
 | `/demo android\|ios\|web` | Launch and demo (emulator/browser) |
 | `/deploy ios\|android` | Install on a physical device |
+| `/testflight` | Archive + upload to TestFlight |
 | `/fix [instructions]` | Auto-fix build errors with Claude |
 | `/widget <description>` | Add iOS home screen widget (WidgetKit) |
 | `/vid` | Record a video from the Android emulator |
@@ -146,8 +148,10 @@ This scaffolds, builds, and demos everything. You'll get screenshots, a video, a
 | `/run <cmd>` | Run a command in the workspace directory |
 | `/status` `/diff` `/commit` `/pr` | Git workflow |
 | `/ls` `/use` `/where` | Workspace management |
+| `/dashboard` | iPhone-style launcher for all apps |
 | `/mirror start\|stop` | Start ws-scrcpy for Android mirroring |
 | `/showcase <ws>` | Share a demo publicly in a channel |
+| `/setup` | Guided setup status + instructions |
 | `/help` | Full command reference |
 
 ### Typical flow from your phone
@@ -178,13 +182,115 @@ Key design decisions:
 - **Auto-fix loop** — build errors get fed back to Claude automatically (up to 4 retries)
 - **Safety checks** — `/run` and `/runsh` have an allowlist; dangerous commands are blocked
 
+## Vibe Coder Setup (quick start)
+
+Just want to describe apps and see them built? Here's the minimum:
+
+1. **Get the bot running** (see [Install](#install) above)
+2. **DM the bot** on Discord: `/buildapp a pomodoro timer`
+3. **Wait a few minutes** — you'll see real-time progress as Claude writes code
+4. **Try your app** — open the web link on your phone, or watch the Android emulator screenshot
+
+That's it. You don't need to know Kotlin, Xcode, or Gradle. The bot handles everything.
+
+### What you can do from Discord
+
+- `/build app <describe anything>` — build a full cross-platform app
+- `@myapp add dark mode` — tell Claude to modify your app
+- `/demo android` or `/demo ios` or `/demo web` — see it running
+- `/fix` — auto-fix build errors (Claude reads the errors and fixes the code)
+- `/deploy ios` — install on your iPhone
+- `/testflight` — upload to TestFlight for anyone to install
+
+### Tips
+
+- Be specific in your descriptions: "a workout tracker with exercise categories, sets/reps logging, and a rest timer" works better than "a fitness app"
+- After building, use `@appname` to iterate: add features, change colors, fix bugs
+- `/dashboard` gives you a launcher page for all your apps in one place
+
+## Developer Setup
+
+Want to modify the bot itself, add new commands, or contribute? Here's the full setup.
+
+### Project structure
+
+```
+bot.py                  # Entry point — Discord client, message routing
+parser.py               # Message grammar — slash commands + @workspace prompts
+config.py               # Environment variables
+platforms.py            # Build/install/demo for Android, iOS, Web
+claude_runner.py        # Claude Code CLI invocation with session continuity
+agent_loop.py           # Auto-fix loop: build → error → Claude fix → rebuild
+workspaces.py           # Workspace registry (JSON-backed)
+commands/
+  buildapp.py           # /buildapp — full pipeline
+  create.py             # /create — scaffold KMP project
+  fix.py                # /fix — auto-fix build errors
+  widget.py             # /widget — iOS WidgetKit
+  testflight.py         # /testflight — archive + upload to TestFlight
+  dashboard.py          # /dashboard — web launcher page
+  bot_todo.py           # /bot-todo — internal todo list
+  git_cmd.py            # Git commands (/status, /diff, /commit, /pr, etc.)
+  run_cmd.py            # /run, /runsh — terminal commands
+  showcase.py           # /showcase, /tryapp — public demos
+  scrcpy.py             # /mirror — Android emulator in browser
+templates/
+  kmp/KMPTemplate/      # KMP project template (copied for each new app)
+```
+
+### Adding a new command
+
+1. **Parser** (`parser.py`): Add a case in the `match cmd:` block
+2. **Handler** (`commands/yourcommand.py`): Create the handler function
+3. **Bot routing** (`bot.py`): Add import + case in the `match cmd.name:` block
+4. **Help text** (`bot.py`): Update `help_text()` function
+
+### Key patterns
+
+- **Status callbacks**: Handlers take `on_status: Callable[[str, Optional[str]], Awaitable[None]]` — first arg is message text, second is optional file path
+- **Build results**: `BuildResult(success, output, error)`, `DemoResult(success, message, screenshot_path)`, `DeployResult(success, message)`
+- **Agent loop**: `run_agent_loop()` handles the build-error-fix cycle for any platform
+- **Claude sessions**: Persist per workspace via `ClaudeRunner._sessions` dict — context carries over between prompts
+
+### Environment setup for all platforms
+
+**Android** (required):
+```bash
+# Install Android Studio → SDK Manager → install SDK + emulator
+# Create an AVD (e.g., Pixel 9 Pro XL, API 35)
+export ANDROID_AVD=Pixel_9_Pro_XL
+```
+
+**iOS** (requires macOS + Xcode):
+```bash
+sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+sudo xcodebuild -license accept
+# Open Xcode → Settings → Platforms → install iOS simulator
+```
+
+**TestFlight** (requires Apple Developer Program, $99/year):
+```bash
+# App Store Connect → Users & Access → Integrations → API Keys
+export APPLE_TEAM_ID=your-team-id
+export ASC_KEY_ID=your-key-id
+export ASC_ISSUER_ID=your-issuer-id
+# Place .p8 file at ~/.private_keys/AuthKey_<KEY_ID>.p8
+```
+
+**Web**: Works out of the box — just needs Gradle (bundled with KMP template).
+
+**Tailscale** (optional, for remote access):
+```bash
+# Install Tailscale on your Mac and phone
+export TAILSCALE_HOSTNAME=100.x.x.x
+# Now web demos and mirror are accessible from your phone anywhere
+```
+
 ## What's next
 
-- [ ] **Xcode / iOS builds** — install Xcode to enable `/build ios` and `/demo ios`
-- [ ] **Deploy to physical iPhone** — `/deploy ios` is wired up, needs Xcode + provisioning profile
-- [ ] **ws-scrcpy for interactive Android** — mirror the emulator in your phone's browser via `/mirror start`
-- [ ] **Showcase gallery** — `/showcase gallery` to browse all published demos
 - [ ] **Multi-user support** — let others build apps too (currently owner-only for builds)
+- [ ] **Web onboarding page** — users provide their Apple API key via a webpage
+- [ ] **Automated TestFlight tester invites** — bot adds testers via App Store Connect API
 
 ## License
 
