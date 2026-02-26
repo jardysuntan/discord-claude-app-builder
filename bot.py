@@ -172,7 +172,8 @@ async def _run_demo(channel, ws_key: str, ws_path: str, platform: str):
                     initial_prompt=(
                         "The iOS build failed. Fix the code so it compiles for iOS.\n"
                         "Only modify what's necessary for iOS compatibility.\n"
-                        f"IMPORTANT: When running xcodebuild, always use: -destination 'name={config.IOS_SIMULATOR_NAME}'\n\n"
+                        f"IMPORTANT: When running xcodebuild, always use: -destination 'name={config.IOS_SIMULATOR_NAME}'\n"
+                        "NEVER use 'simctl launch --console' — it blocks forever. Use 'simctl launch' without --console.\n\n"
                         f"```\n{build_result.error[:800]}\n```"
                     ),
                     workspace_key=ws_key,
@@ -218,7 +219,8 @@ async def _run_demo(channel, ws_key: str, ws_path: str, platform: str):
                                 initial_prompt=(
                                     f"The iOS app ({bundle_id}) crashes on launch with a runtime error.\n"
                                     "Fix the code so it runs without crashing.\n"
-                                    f"IMPORTANT: When running xcodebuild, always use: -destination 'name={config.IOS_SIMULATOR_NAME}'\n\n"
+                                    f"IMPORTANT: When running xcodebuild, always use: -destination 'name={config.IOS_SIMULATOR_NAME}'\n"
+                                    "NEVER use 'simctl launch --console' — it blocks forever. Use 'simctl launch' without --console.\n\n"
                                     f"Crash log:\n```\n{crash_log[:800]}\n```"
                                 ),
                                 workspace_key=ws_key,

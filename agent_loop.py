@@ -146,7 +146,10 @@ async def run_agent_loop(
 
         sim_hint = ""
         if platform == "ios":
-            sim_hint = f"IMPORTANT: When running xcodebuild, always use: -destination 'name={config.IOS_SIMULATOR_NAME}'\n"
+            sim_hint = (
+                f"IMPORTANT: When running xcodebuild, always use: -destination 'name={config.IOS_SIMULATOR_NAME}'\n"
+                "NEVER use 'simctl launch --console' — it blocks forever. Use 'simctl launch' without --console.\n"
+            )
 
         fixes_context = get_recent_fixes(workspace_path)
         past_fixes = f"Previous fixes for this project:\n{fixes_context}\n\n" if fixes_context else ""
