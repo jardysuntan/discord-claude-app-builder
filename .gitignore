@@ -34,3 +34,6 @@ bot_orig.py
 
 # Logs
 *.log
+
+# Claude Code worklog (local session notes)
+worklog.md

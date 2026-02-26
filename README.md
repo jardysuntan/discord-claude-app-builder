@@ -23,17 +23,19 @@ You DM the bot something like `/buildapp a habit tracker with streaks`. Behind t
 
 1. A KMP project gets scaffolded from a template (or generated from scratch)
 2. Claude Code CLI writes all the Compose Multiplatform UI and logic
-3. The bot builds for Android — if it fails, Claude reads the errors and fixes them (up to 4 attempts)
+3. The bot builds for Android — if it fails, Claude reads the errors and fixes them (up to 8 attempts)
 4. Once it compiles, you get a screenshot and video from the Android emulator
 5. It builds for Web (WASM) and gives you a link to play with the app in your browser
-6. It builds for iOS — if it fails, Claude fixes those too (up to 4 attempts)
+6. It builds for iOS — if it fails, Claude fixes those too, including crash-on-launch detection and auto-fix
 7. `/testflight` uploads to TestFlight so anyone can install it natively
 
-The whole thing takes a few minutes. You get real-time progress updates in Discord as Claude reads files, writes code, and runs commands.
+The whole thing takes a few minutes. You get real-time progress updates in Discord — with friendly labels like "Building project..." instead of raw tool names.
+
+**Build fix memory:** Every error and fix is logged to `.fixes.md` in each workspace. The next time a build fails, Claude sees what went wrong before and avoids repeating mistakes.
 
 ## Tech stack
 
-- **Python 3.9+** with **discord.py** — the bot itself
+- **Python 3.10+** with **discord.py** — the bot itself (uses match/case)
 - **Claude Code CLI** — AI that writes and fixes the app code
 - **Kotlin Multiplatform + Compose Multiplatform** — one codebase, three platforms
 - **Gradle** — builds Android (APK) and Web (WASM)
@@ -47,7 +49,7 @@ The whole thing takes a few minutes. You get real-time progress updates in Disco
 ### Prerequisites
 
 - macOS (needed for iOS builds; Android + Web work on Linux too)
-- Python 3.9+
+- Python 3.10+
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
 - Android SDK with an AVD configured (for Android builds/demos)
 - Xcode (for iOS builds — optional, can add later)
@@ -148,9 +150,16 @@ This scaffolds, builds, and demos everything. You'll get screenshots, a video, a
 | `/run <cmd>` | Run a command in the workspace directory |
 | `/status` `/diff` `/commit` `/pr` | Git workflow |
 | `/ls` `/use` `/where` | Workspace management |
+| `/rename <old> <new>` | Rename a workspace |
 | `/dashboard` | iPhone-style launcher for all apps |
 | `/mirror start\|stop` | Start ws-scrcpy for Android mirroring |
 | `/showcase <ws>` | Share a demo publicly in a channel |
+| `/fixes` | View the persistent build fix log |
+| `/fixes clear` | Clear the fix log |
+| `/memory show\|pin\|reset` | Project memory (CLAUDE.md) |
+| `/newsession` | Reset Claude session for current workspace |
+| `/maintenance [msg\|off]` | Toggle maintenance mode (owner only) |
+| `/announce <msg>` | Post to announcement channel (owner only) |
 | `/setup` | Guided setup status + instructions |
 | `/help` | Full command reference |
 
@@ -178,9 +187,12 @@ Discord DM → parser.py → bot.py → handler
 
 Key design decisions:
 - **Claude sessions persist per workspace** — context carries over between prompts
-- **Stream-json output** — real-time progress updates in Discord as Claude works
-- **Auto-fix loop** — build errors get fed back to Claude automatically (up to 4 retries)
+- **Stream-json output** — real-time progress updates in Discord as Claude works (with friendly labels)
+- **Auto-fix loop** — build errors get fed back to Claude automatically (up to 8 retries)
+- **Crash detection** — iOS demos detect crash-on-launch and auto-fix runtime errors
+- **Fix memory** — `.fixes.md` logs every error+fix per workspace; injected into future fix prompts so Claude learns from past mistakes
 - **Safety checks** — `/run` and `/runsh` have an allowlist; dangerous commands are blocked
+- **Maintenance mode** — owner can block public commands while updating the bot
 
 ## Vibe Coder Setup (quick start)
 
@@ -226,10 +238,13 @@ commands/
   buildapp.py           # /buildapp — full pipeline
   create.py             # /create — scaffold KMP project
   fix.py                # /fix — auto-fix build errors
+  fixes_cmd.py          # /fixes — persistent build fix log
   widget.py             # /widget — iOS WidgetKit
   testflight.py         # /testflight — archive + upload to TestFlight
   dashboard.py          # /dashboard — web launcher page
   bot_todo.py           # /bot-todo — internal todo list
+  memory_cmd.py         # /memory — project memory (CLAUDE.md)
+  queue.py              # /queue — batch task queue
   git_cmd.py            # Git commands (/status, /diff, /commit, /pr, etc.)
   run_cmd.py            # /run, /runsh — terminal commands
   showcase.py           # /showcase, /tryapp — public demos
@@ -289,8 +304,8 @@ export TAILSCALE_HOSTNAME=100.x.x.x
 ## What's next
 
 - [ ] **Multi-user support** — let others build apps too (currently owner-only for builds)
-- [ ] **Web onboarding page** — users provide their Apple API key via a webpage
 - [ ] **Automated TestFlight tester invites** — bot adds testers via App Store Connect API
+- [ ] **Android crash detection** — match the iOS crash-detect-and-fix flow for Android demos
 
 ## License
 
