@@ -10,10 +10,14 @@ A Discord bot that builds cross-platform apps from natural language. Describe wh
     <td align="center">
       <img src="https://github.com/user-attachments/assets/db6b4b82-d410-4bcb-9f66-3b0f5fcfe6b9" width="350"/>
     </td>
-        <td align="center">
+    <td align="center">
       <img src="https://github.com/user-attachments/assets/a99cb18f-871e-4551-8b48-baa6f7f8cd10" width="350"/>
     </td>
+       <td align="center">
+      <img src="https://github.com/user-attachments/assets/1259c341-12c7-4128-8c3e-140cbc779570" width="350"/>
+    </td>
   </tr>
+
 
 </table>
 
