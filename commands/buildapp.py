@@ -15,6 +15,7 @@ from claude_runner import ClaudeRunner
 from agent_loop import run_agent_loop, format_loop_summary
 from commands.create import create_kmp_project
 from platforms import AndroidPlatform, iOSPlatform, WebPlatform
+from supabase_client import run_sql, extract_sql
 
 
 def infer_app_name(description: str) -> str:
@@ -26,8 +27,34 @@ def infer_app_name(description: str) -> str:
     return "".join(w.capitalize() for w in name_words if w.isalpha()) or "MyApp"
 
 
-def build_feature_prompt(app_name: str, description: str) -> str:
-    return f"""Build a complete Kotlin Multiplatform app called "{app_name}".
+SCHEMA_PROMPT = """You are a database architect. Given the app description below,
+generate a PostgreSQL schema for Supabase.
+
+App name: {app_name}
+Description: {description}
+
+Rules:
+- Output ONLY a single SQL block (```sql ... ```) — no explanation.
+- Use CREATE TABLE IF NOT EXISTS.
+- Use "camelCase" quoted column names so Kotlin @Serializable data classes work
+  without @SerialName (e.g. "createdAt" timestamptz).
+- Every table gets: id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+  "createdAt" timestamptz DEFAULT now().
+- Include an app_meta table with columns: id (int default 1, PK, CHECK id=1),
+  version text, "lastUpdated" timestamptz DEFAULT now(), "joinCode" text, "organizerCode" text.
+- Add a get_app_config() RPC that returns all rows from every table as a single
+  JSON object via json_build_object + (SELECT json_agg(...) FROM <table>).
+- Add permissive RLS: ALTER TABLE <t> ENABLE ROW LEVEL SECURITY;
+  CREATE POLICY "public_access" ON <t> FOR ALL USING (true) WITH CHECK (true);
+  for every table.
+- Keep it minimal — only tables the app clearly needs.
+"""
+
+
+def build_feature_prompt(
+    app_name: str, description: str, schema_sql: Optional[str] = None,
+) -> str:
+    base = f"""Build a complete Kotlin Multiplatform app called "{app_name}".
 
 Description: {description}
 
@@ -45,16 +72,49 @@ Requirements:
 
 Write complete, working code. No TODOs or placeholders."""
 
+    if schema_sql and config.SUPABASE_ANON_KEY:
+        supabase_url = f"https://{config.SUPABASE_PROJECT_REF}.supabase.co"
+        base += f"""
+
+## Supabase Backend
+
+The database has been provisioned. Connect to it using these details:
+
+- Supabase URL: {supabase_url}
+- Anon key: {config.SUPABASE_ANON_KEY}
+
+Schema that was created:
+```sql
+{schema_sql}
+```
+
+Instructions for the backend integration:
+- Add Ktor client + kotlinx.serialization dependencies to commonMain build.gradle.kts
+  (io.ktor:ktor-client-core, io.ktor:ktor-client-content-negotiation,
+   io.ktor:ktor-serialization-kotlinx-json, and platform engines:
+   io.ktor:ktor-client-okhttp for Android, io.ktor:ktor-client-darwin for iOS,
+   io.ktor:ktor-client-js for wasmJs/js).
+- Create a ConfigRepository in commonMain that:
+  1. Calls GET {supabase_url}/rest/v1/rpc/get_app_config with headers:
+     apikey: <anon_key>, Authorization: Bearer <anon_key>
+  2. Parses the JSON response into @Serializable data classes
+  3. Falls back to hardcoded demo data if the network call fails
+- The UI should load data from ConfigRepository on launch.
+- Use "camelCase" property names in data classes — they match the DB column names exactly.
+"""
+
+    return base
+
 
 async def handle_buildapp(
     description: str,
     registry: WorkspaceRegistry,
     claude: ClaudeRunner,
     on_status: Callable[[str, Optional[str]], Awaitable[None]],
-) -> None:
+) -> Optional[str]:
     if not description:
         await on_status("Usage: `/buildapp <description of the app>`", None)
-        return
+        return None
 
     start_time = time.time()
     app_name = infer_app_name(description)
@@ -66,17 +126,38 @@ async def handle_buildapp(
     await on_status(scaffold_result.message, None)
 
     if not scaffold_result.success:
-        return
+        return None
 
     slug = scaffold_result.slug
     app_name = slug  # use actual name (may have been incremented)
     ws_path = registry.get_path(slug)
     if not ws_path:
         await on_status(f"❌ Could not find workspace `{slug}`.", None)
-        return
+        return None
 
-    # 2. Claude builds features + auto-fix for Android first
-    feature_prompt = build_feature_prompt(app_name, description)
+    # 2. Supabase schema (if configured)
+    schema_sql = None
+    if config.SUPABASE_PROJECT_REF and config.SUPABASE_MANAGEMENT_KEY:
+        await on_status("🗄️ Designing database schema...", None)
+        schema_prompt = SCHEMA_PROMPT.format(description=description, app_name=app_name)
+        schema_result = await claude.run(schema_prompt, slug, ws_path)
+        schema_sql = extract_sql(schema_result.stdout)
+
+        if schema_sql:
+            await on_status("🗄️ Creating Supabase tables...", None)
+            ok, err = await run_sql(schema_sql)
+            if ok:
+                await on_status("✅ Database ready.", None)
+            else:
+                await on_status(
+                    f"⚠️ DB setup failed: {err[:200]}. Continuing without backend.", None
+                )
+                schema_sql = None
+        else:
+            await on_status("⚠️ Could not extract SQL from schema response. Continuing without backend.", None)
+
+    # 3. Claude builds features + auto-fix for Android first
+    feature_prompt = build_feature_prompt(app_name, description, schema_sql=schema_sql)
 
     async def loop_status(msg):
         await on_status(msg, None)
@@ -98,14 +179,14 @@ async def handle_buildapp(
             f"Android build didn't succeed. Try `@{slug} <fix instructions>`.",
             None,
         )
-        return
+        return slug
 
-    # 3. Android demo
+    # 4. Android demo
     await on_status("📱 **Android** — launching demo...", None)
     android_demo = await AndroidPlatform.full_demo(ws_path)
     await on_status(android_demo.message, android_demo.screenshot_path)
 
-    # 4. Web build + auto-fix (so anyone can try it in browser)
+    # 5. Web build + auto-fix (so anyone can try it in browser)
     await on_status("🌐 **Web** — building and fixing browser version...", None)
     web_loop = await run_agent_loop(
         initial_prompt=(
@@ -141,7 +222,7 @@ async def handle_buildapp(
             None,
         )
 
-    # 5. iOS build + auto-fix (same as web)
+    # 6. iOS build + auto-fix (same as web)
     await on_status("🍎 **iOS** — building and fixing simulator version...", None)
     ios_loop = await run_agent_loop(
         initial_prompt=(
@@ -173,7 +254,7 @@ async def handle_buildapp(
             None,
         )
 
-    # 6. Final summary
+    # 7. Final summary
     elapsed = int(time.time() - start_time)
     mins, secs = divmod(elapsed, 60)
 
@@ -197,3 +278,5 @@ async def handle_buildapp(
         f"  `/fix` — auto-fix build errors",
         None,
     )
+
+    return slug

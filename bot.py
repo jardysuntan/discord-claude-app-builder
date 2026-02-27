@@ -96,26 +96,6 @@ class ConfirmDeleteView(discord.ui.View):
         pass
 
 
-class WorkspaceFooterView(discord.ui.View):
-    """Footer with current workspace + Switch button."""
-
-    def __init__(self, owner_id: int):
-        super().__init__(timeout=120)
-        self.owner_id = owner_id
-
-    @discord.ui.button(label="Switch workspace", style=discord.ButtonStyle.secondary)
-    async def switch(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.owner_id:
-            return await interaction.response.send_message("Not your command.", ephemeral=True)
-        keys = registry.list_keys()
-        if not keys:
-            return await interaction.response.edit_message(
-                content="No workspaces.", view=None)
-        view = WorkspaceSelectorView(self.owner_id, keys)
-        await interaction.response.edit_message(
-            content="Pick a workspace:", view=view)
-
-
 class WorkspaceSelectorView(discord.ui.View):
     """Shows workspace buttons for switching."""
 
@@ -123,7 +103,7 @@ class WorkspaceSelectorView(discord.ui.View):
         super().__init__(timeout=60)
         self.owner_id = owner_id
         current = registry.get_default(owner_id)
-        for key in keys[:20]:  # Discord max ~25 buttons
+        for key in keys[:20]:
             style = discord.ButtonStyle.primary if key == current else discord.ButtonStyle.secondary
             self.add_item(WorkspaceButton(key, style, owner_id))
 
@@ -382,16 +362,15 @@ class QueueBuilderView(discord.ui.View):
 
 
 async def send_workspace_footer(channel, user_id: int):
-    """Send workspace footer with Switch button."""
-    keys = registry.list_keys()
-    if not keys:
-        return
+    """Send plain-text workspace indicator, or selector buttons when none is set."""
     ws = registry.get_default(user_id)
-    view = WorkspaceFooterView(user_id)
     if ws:
-        await channel.send(f"📂 workspace: **{ws}**", view=view)
+        await channel.send(f"📂 workspace: **{ws}**")
     else:
-        await channel.send("📂 No workspace set — pick one:", view=view)
+        keys = registry.list_keys()
+        if keys:
+            view = WorkspaceSelectorView(user_id, keys)
+            await channel.send("📂 No workspace set — pick one:", view=view)
 
 
 def help_text():
@@ -436,14 +415,26 @@ def help_text():
 
 # ── Events ───────────────────────────────────────────────────────────────────
 
+_startup_announced = False
+
+
 @client.event
 async def on_ready():
+    global _startup_announced
     print(f"✅ Logged in as {client.user}")
+    if _startup_announced:
+        print("  (on_ready fired again — skipping announcement)")
+        return
+    _startup_announced = True
+    # Brief delay so rapid reconnect bursts settle
+    await asyncio.sleep(3)
     # DM the owner on startup
     try:
         owner = await client.fetch_user(config.DISCORD_ALLOWED_USER_ID)
         if owner:
-            await owner.send("✅ Bot is back online and updated!")
+            ws = registry.get_default(config.DISCORD_ALLOWED_USER_ID)
+            ws_line = f"\n📂 workspace: **{ws}**" if ws else ""
+            await owner.send(f"✅ Bot is back online and updated!{ws_line}")
             print(f"  Announced to {owner.display_name}")
     except Exception as e:
         print(f"  ⚠️ Could not DM owner: {e}")
@@ -666,7 +657,10 @@ async def on_message(message: discord.Message):
             else:
                 async def ba_status(msg, fpath=None):
                     await send(channel, msg, file_path=fpath)
-                await buildapp.handle_buildapp(cmd.raw_cmd or "", registry, claude, ba_status)
+                slug = await buildapp.handle_buildapp(cmd.raw_cmd or "", registry, claude, ba_status)
+                if slug:
+                    registry.set_default(message.author.id, slug)
+                    await send(channel, f"📂 Switched to **{slug}**")
 
         case "build":
             if not config.AGENT_MODE:

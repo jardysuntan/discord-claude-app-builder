@@ -61,6 +61,11 @@ TEMPLATE_OLD_PKG: str = os.getenv("TEMPLATE_OLD_PKG", "com.jaredtan.kmptemplate"
 SCRCPY_DIR: str = os.getenv("SCRCPY_DIR", os.path.expanduser("~/tools/ws-scrcpy"))
 SCRCPY_PORT: int = int(os.getenv("SCRCPY_PORT", "8000"))
 
+# ── Supabase ──────────────────────────────────────────────────────────────────
+SUPABASE_PROJECT_REF: str = os.getenv("SUPABASE_PROJECT_REF", "")
+SUPABASE_MANAGEMENT_KEY: str = os.getenv("SUPABASE_MANAGEMENT_KEY", "")
+SUPABASE_ANON_KEY: str = os.getenv("SUPABASE_ANON_KEY", "")
+
 # ── Queue & Budget ──────────────────────────────────────────────────────
 DAILY_TOKEN_CAP_USD: float = float(os.getenv("DAILY_TOKEN_CAP_USD", "50"))
 QUEUE_STOP_PCT: int = int(os.getenv("QUEUE_STOP_PCT", "90"))
@@ -93,3 +98,4 @@ def print_config_summary():
     print(f"  Web port:        {WEB_SERVE_PORT}")
     print(f"  Tailscale:       {TAILSCALE_HOSTNAME or '(not set)'}")
     print(f"  TestFlight:      {'configured' if APPLE_TEAM_ID and ASC_KEY_ID else 'not configured'}")
+    print(f"  Supabase:        {'configured' if SUPABASE_PROJECT_REF and SUPABASE_MANAGEMENT_KEY else 'not configured'}")
