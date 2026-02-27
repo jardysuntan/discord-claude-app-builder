@@ -110,6 +110,25 @@ You get real-time progress updates in Discord as Claude works.
 
 **Build fix memory:** Every error and fix is logged per project. The next time a build fails, Claude sees what went wrong before and avoids repeating mistakes.
 
+### Supabase backend (automatic)
+
+When Supabase is configured, `/buildapp` automatically provisions a database for each app:
+
+1. Claude generates a Postgres schema tailored to the app description (tables, RLS policies, and a `get_app_config()` RPC)
+2. The bot executes the SQL on your Supabase project via the Management API
+3. The feature prompt tells Claude to wire up Ktor + kotlinx.serialization to fetch data from the RPC endpoint, with demo-data fallback
+
+The result: your app launches with real Supabase connectivity out of the box. Edit data in the Supabase Table Editor (it's a spreadsheet UI) and the app picks up changes on next launch.
+
+Without Supabase configured, `/buildapp` works exactly as before — apps use hardcoded demo data.
+
+To enable, add to `.env`:
+```bash
+SUPABASE_PROJECT_REF=your-project-ref
+SUPABASE_MANAGEMENT_KEY=your-management-key   # from supabase.com/dashboard/account/tokens
+SUPABASE_ANON_KEY=your-anon-key               # from project settings → API
+```
+
 ---
 
 ## Setup
@@ -260,6 +279,7 @@ platforms.py            # Build/install/demo for Android, iOS, Web
 claude_runner.py        # Claude Code CLI invocation with session continuity
 agent_loop.py           # Auto-fix loop: build → error → Claude fix → rebuild
 workspaces.py           # Workspace registry (JSON-backed)
+supabase_client.py      # Supabase Management API client (schema provisioning)
 commands/
   buildapp.py           # /buildapp — full pipeline
   create.py             # /create — scaffold KMP project
@@ -327,8 +347,11 @@ export TAILSCALE_HOSTNAME=100.x.x.x
 # Now web demos and mirror are accessible from your phone anywhere
 ```
 
-## What's next
+## Roadmap
 
+- [ ] **LLM selection** — let users choose their LLM provider (with subscription info)
+- [ ] **Data modeling interview** — conversational flow in `/buildapp` that helps non-engineers describe their data needs, then auto-provisions Supabase tables
+- [ ] **OAuth onboarding** — "click this link" flows for Supabase, Apple, Google, and Claude API so non-engineers don't have to copy-paste API keys
 - [ ] **Multi-user support** — let others build apps too (currently owner-only for builds)
 - [ ] **Automated TestFlight tester invites** — bot adds testers via App Store Connect API
 - [ ] **Android crash detection** — match the iOS crash-detect-and-fix flow for Android demos
