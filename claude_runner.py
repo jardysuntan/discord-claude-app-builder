@@ -219,7 +219,9 @@ class ClaudeRunner:
 
             stderr_task = asyncio.create_task(read_stderr())
 
-            # Heartbeat: send "still working" when user hasn't seen an update
+            # Heartbeat: send "still working" with elapsed time
+            run_start_time = time.time()
+
             async def heartbeat():
                 nonlocal last_progress_time
                 while not process_done:
@@ -228,8 +230,14 @@ class ClaudeRunner:
                         break
                     now = time.time()
                     if on_progress and now - last_progress_time >= HEARTBEAT_INTERVAL:
+                        elapsed = int(now - run_start_time)
+                        mins, secs = divmod(elapsed, 60)
+                        if mins > 0:
+                            elapsed_str = f"{mins}m {secs}s"
+                        else:
+                            elapsed_str = f"{secs}s"
                         try:
-                            await on_progress("⏳ Still working…")
+                            await on_progress(f"⏳ Still working… ({elapsed_str})")
                         except Exception:
                             pass
                         last_progress_time = now

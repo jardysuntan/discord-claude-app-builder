@@ -102,8 +102,8 @@ class EditSaveDescriptionModal(discord.ui.Modal, title="Edit save description"):
 
     description_input = discord.ui.TextInput(
         label="Description",
-        style=discord.TextStyle.short,
-        max_length=80,
+        style=discord.TextStyle.long,
+        max_length=500,
         placeholder="e.g. added dark mode toggle",
     )
 
@@ -113,7 +113,7 @@ class EditSaveDescriptionModal(discord.ui.Modal, title="Edit save description"):
         self.description_input.default = view.description
 
     async def on_submit(self, interaction: discord.Interaction):
-        new_desc = self.description_input.value.strip()[:80]
+        new_desc = self.description_input.value.strip()[:500]
         self.save_view.stop()
         result = await git_cmd.commit_save(
             self.save_view.ws_path, self.save_view.save_number, new_desc,
