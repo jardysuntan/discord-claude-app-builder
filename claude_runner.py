@@ -149,24 +149,8 @@ def _progress_from_event(event: dict, state: dict | None = None) -> Optional[str
 class ClaudeRunner:
     def __init__(self):
         self._sessions: dict[str, str] = {}
-        self._run_durations: dict[str, list[float]] = {}  # workspace → last N durations
         self._claude_bin = _resolve_claude_bin()
         print(f"  Claude binary:   {self._claude_bin}")
-
-    def _record_duration(self, workspace: str, duration: float):
-        """Record a run duration for ETA estimates."""
-        if workspace not in self._run_durations:
-            self._run_durations[workspace] = []
-        self._run_durations[workspace].append(duration)
-        # Keep last 10
-        self._run_durations[workspace] = self._run_durations[workspace][-10:]
-
-    def _estimated_duration(self, workspace: str) -> Optional[float]:
-        """Return average duration for this workspace, or None if no history."""
-        durations = self._run_durations.get(workspace, [])
-        if not durations:
-            return None
-        return sum(durations) / len(durations)
 
     def get_session(self, workspace: str) -> Optional[str]:
         return self._sessions.get(workspace)
@@ -235,9 +219,8 @@ class ClaudeRunner:
 
             stderr_task = asyncio.create_task(read_stderr())
 
-            # Heartbeat: send "still working" with elapsed time + ETA
+            # Heartbeat: send "still working" with elapsed time
             run_start_time = time.time()
-            est = self._estimated_duration(workspace_key)
 
             async def heartbeat():
                 nonlocal last_progress_time
@@ -249,21 +232,12 @@ class ClaudeRunner:
                     if on_progress and now - last_progress_time >= HEARTBEAT_INTERVAL:
                         elapsed = int(now - run_start_time)
                         mins, secs = divmod(elapsed, 60)
-                        elapsed_str = f"{mins}m {secs}s" if mins > 0 else f"{secs}s"
-                        if est and est > 30:
-                            remaining = max(0, int(est - elapsed))
-                            r_mins, r_secs = divmod(remaining, 60)
-                            if remaining <= 0:
-                                eta_str = "almost done"
-                            elif r_mins > 0:
-                                eta_str = f"~{r_mins}m {r_secs}s left"
-                            else:
-                                eta_str = f"~{r_secs}s left"
-                            msg = f"⏳ Still working… ({elapsed_str} · {eta_str})"
+                        if mins > 0:
+                            elapsed_str = f"{mins}m {secs}s"
                         else:
-                            msg = f"⏳ Still working… ({elapsed_str})"
+                            elapsed_str = f"{secs}s"
                         try:
-                            await on_progress(msg)
+                            await on_progress(f"⏳ Still working… ({elapsed_str})")
                         except Exception:
                             pass
                         last_progress_time = now
@@ -336,12 +310,7 @@ class ClaudeRunner:
             return ClaudeResult(stdout="", stderr=str(e), exit_code=-1)
 
         exit_code = proc.returncode or 0
-        run_duration = time.time() - run_start_time
-        print(f"[claude] Done: exit_code={exit_code} result_len={len(result_text)} stderr_len={len(stderr)} duration={run_duration:.1f}s")
-
-        # Record duration for future ETA estimates
-        if exit_code == 0:
-            self._record_duration(workspace_key, run_duration)
+        print(f"[claude] Done: exit_code={exit_code} result_len={len(result_text)} stderr_len={len(stderr)}")
 
         if result_session_id:
             self._sessions[workspace_key] = result_session_id
