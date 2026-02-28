@@ -13,7 +13,9 @@ class WorkspaceRegistry:
     def __init__(self):
         self._workspaces: dict[str, str] = {}
         self._user_defaults: dict[int, str] = {}
+        self._user_platforms: dict[int, str] = {}
         self._defaults_path = Path(config.WORKSPACES_PATH).parent / "user_defaults.json"
+        self._platforms_path = Path(config.WORKSPACES_PATH).parent / "user_platforms.json"
         self.reload()
         self._global_default = config.DEFAULT_WORKSPACE or None
 
@@ -32,6 +34,14 @@ class WorkspaceRegistry:
                 self._user_defaults = {int(k): v for k, v in raw.items()}
             except (json.JSONDecodeError, ValueError):
                 self._user_defaults = {}
+        # Load persisted platform preferences
+        if self._platforms_path.exists():
+            try:
+                with open(self._platforms_path) as f:
+                    raw = json.load(f)
+                self._user_platforms = {int(k): v for k, v in raw.items()}
+            except (json.JSONDecodeError, ValueError):
+                self._user_platforms = {}
 
     def list_keys(self) -> list[str]:
         return sorted(self._workspaces.keys())
@@ -92,3 +102,14 @@ class WorkspaceRegistry:
     def _save_defaults(self):
         with open(self._defaults_path, "w") as f:
             json.dump({str(k): v for k, v in self._user_defaults.items()}, f, indent=2)
+
+    def set_platform(self, user_id: int, platform: str):
+        self._user_platforms[user_id] = platform.lower()
+        self._save_platforms()
+
+    def get_platform(self, user_id: int) -> Optional[str]:
+        return self._user_platforms.get(user_id)
+
+    def _save_platforms(self):
+        with open(self._platforms_path, "w") as f:
+            json.dump({str(k): v for k, v in self._user_platforms.items()}, f, indent=2)

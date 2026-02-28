@@ -1,6 +1,23 @@
 # discord-claude-app-builder
 
-A Discord bot that builds cross-platform apps from natural language. Describe what you want, and it scaffolds a Kotlin Multiplatform project, has Claude Code write the code, auto-fixes build errors, and demos the result on Android, iOS, and Web — all from your phone.
+A Discord bot that turns natural language into production-quality cross-platform apps. Describe what you want, and it scaffolds a Kotlin Multiplatform project, has Claude Code write the code, auto-fixes build errors, and demos the result on Android, iOS, and Web — all from your phone.
+
+## Why this is different
+
+Every AI app builder can generate code that compiles. This one generates apps that **feel real** — because the platform encodes years of production mobile engineering into every app it creates.
+
+Most AI-generated apps are demos: no error handling, no loading states, no offline support, no thought given to what happens when the network drops or the user hits an edge case. Non-engineers don't know to ask for these things, but they notice immediately when an app feels broken.
+
+This bot bridges that gap. It takes a naive app idea and automatically covers the edge cases that separate a toy from a real app:
+
+- **Network error handling** — retry logic, graceful degradation, offline-friendly patterns
+- **Validation and error states** — input validation, meaningful error messages, recovery flows
+- **Production UX patterns** — skeleton loaders, pull-to-refresh, optimistic updates, smooth transitions
+- **Platform-native navigation** — proper back stack, deep linking, platform-appropriate patterns for iOS and Android
+- **Auto-provisioned backend** — Supabase tables, RLS policies, and API wiring generated and deployed from a single prompt, with SQL guardrails that block destructive operations and ensure idempotent re-runs
+- **Real build pipeline** — auto-fix loops that detect build errors AND runtime crashes, with fix memory so the same mistake never happens twice
+
+The result: a non-engineer says "build me a workout tracker" and gets an app that works offline, handles errors gracefully, and feels native on every platform — not a skeleton that crashes when you turn off wifi.
 
 <table>
   <tr>
@@ -355,6 +372,27 @@ export TAILSCALE_HOSTNAME=100.x.x.x
 - [ ] **Multi-user support** — let others build apps too (currently owner-only for builds)
 - [ ] **Automated TestFlight tester invites** — bot adds testers via App Store Connect API
 - [ ] **Android crash detection** — match the iOS crash-detect-and-fix flow for Android demos
+
+## Follow-ups
+
+These are larger directional shifts planned once the core product is validated:
+
+### 1. Multi-user and concurrency
+Move from single-user apps to apps with multiple concurrent users (think Instagram, not a personal tracker). This means Supabase Row Level Security on every table, auth flows baked into templates, realtime subscriptions for live updates, and handling concurrent writes safely (optimistic locking, conflict resolution). The goal: a non-engineer says "build me a messaging app" and gets something that actually works with multiple people — not a single-player mockup.
+
+### 2. Standalone chat UI
+Graduate from Discord to a purpose-built native app. Discord is the right MVP channel (free auth, messaging, notifications), but once real users hit Discord-specific friction ("I don't have Discord", "the UX is too noisy"), the bot moves into its own iOS/Android app with a focused chat interface. Same Claude backend, cleaner experience, App Store distribution.
+
+### 3. FastAPI service extraction
+Decouple the core pipeline from Discord so external systems can call the app builder over HTTP. Steps:
+- [ ] Extract pipeline logic (Claude runner, build loops, workspace management) into a `core/` module with no Discord imports
+- [ ] Wrap `core/` in a FastAPI server (`api/`) — endpoints for build, demo, fix, status
+- [ ] Refactor the Discord bot into a thin client that calls `core/` directly (same in-process calls, no HTTP)
+- [ ] Add auth (API key or Tailscale-only) for external callers
+- [ ] External integration: HTTP calls over Tailscale to the FastAPI endpoints
+
+### 4. Complex backend processing
+Supabase (Postgres + Edge Functions) handles most app backends without custom server code. But once generated apps need payment processing (Stripe), multi-step background workflows, third-party API orchestration, or heavy compute — that's when a dedicated backend layer (Node/Rails/serverless) gets introduced. Not before. The principle: don't add infrastructure until a real user need demands it.
 
 ## License
 

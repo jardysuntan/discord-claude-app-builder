@@ -101,6 +101,9 @@ def parse(text: str) -> ParseResult:
                                workspace=rename_parts[0].lower() if rename_parts else None,
                                arg=rename_parts[1].lower() if len(rename_parts) > 1 else None)
 
+            case "/platform":
+                return Command(name="platform", platform=rest.strip().lower() if rest else None)
+
             case "/demo":
                 platform, _ = _parse_platform(rest)
                 return Command(name="demo", platform=platform)

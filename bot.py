@@ -25,6 +25,7 @@ from cost_tracker import CostTracker
 from commands.create import create_kmp_project
 from agent_loop import run_agent_loop, format_loop_summary
 from platforms import demo_platform, build_platform, deploy_ios, deploy_android, AndroidPlatform, iOSPlatform, WebPlatform
+from supabase_client import snapshot_sql_files, detect_changed_sql, sync_sql_files
 
 # ── Startup ──────────────────────────────────────────────────────────────────
 
@@ -122,6 +123,26 @@ class WorkspaceButton(discord.ui.Button):
         registry.set_default(self.owner_id, self.ws_key)
         await interaction.response.edit_message(
             content=f"Switched to **{self.ws_key}**.", view=None)
+
+
+# ── Data-interview guard ─────────────────────────────────────────────────
+# Tracks (channel_id, user_id) pairs with a pending data-description question
+# so the reply isn't double-processed as a FallbackPrompt.
+_interview_pending: set[tuple[int, int]] = set()
+
+
+class SkipDataInterviewView(discord.ui.View):
+    """Single 'Skip' button for the data-modeling interview."""
+
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.skipped = False
+
+    @discord.ui.button(label="Skip", style=discord.ButtonStyle.secondary)
+    async def skip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.skipped = True
+        self.stop()
+        await interaction.response.defer()
 
 
 STILL_LISTENING = "💡 *I'm still listening — feel free to send other commands while this runs.*"
@@ -499,6 +520,11 @@ async def on_message(message: discord.Message):
 
     # ── Claude prompts ───────────────────────────────────────────────────
     if isinstance(parsed, (WorkspacePrompt, FallbackPrompt)):
+        # If a data-interview is pending for this user, let the interview
+        # collector grab the reply instead of routing it to Claude.
+        if isinstance(parsed, FallbackPrompt) and (channel.id, message.author.id) in _interview_pending:
+            return
+
         if isinstance(parsed, WorkspacePrompt):
             ws_key, ws_path = registry.resolve(parsed.workspace, message.author.id)
             prompt = parsed.prompt
@@ -513,6 +539,11 @@ async def on_message(message: discord.Message):
 
         await send(channel, f"🧠 Thinking in **{ws_key}**…")
         await send(channel, STILL_LISTENING)
+
+        # Snapshot SQL files before Claude runs (for auto-sync)
+        sql_before = {}
+        if config.SUPABASE_PROJECT_REF and config.SUPABASE_MANAGEMENT_KEY:
+            sql_before = snapshot_sql_files(ws_path)
 
         async def claude_progress(msg):
             await send(channel, msg)
@@ -539,6 +570,15 @@ async def on_message(message: discord.Message):
             else:
                 return await send(channel, f"⚠️ Error:\n```\n{error_detail[:1500]}\n```")
         await send(channel, result.stdout or "(empty)")
+
+        # Auto-sync changed SQL files to Supabase
+        if sql_before and config.SUPABASE_PROJECT_REF and config.SUPABASE_MANAGEMENT_KEY:
+            changed_sql = detect_changed_sql(sql_before, ws_path)
+            if changed_sql:
+                await send(channel, "🗄️ Updating database...")
+                ok, sync_msg = await sync_sql_files(changed_sql)
+                icon = "✅" if ok else "⚠️"
+                await send(channel, f"{icon} {sync_msg}")
 
         # Auto-build web so iPhone users can see updates immediately
         if config.AGENT_MODE:
@@ -657,7 +697,50 @@ async def on_message(message: discord.Message):
             else:
                 async def ba_status(msg, fpath=None):
                     await send(channel, msg, file_path=fpath)
-                slug = await buildapp.handle_buildapp(cmd.raw_cmd or "", registry, claude, ba_status)
+
+                async def ba_ask(question: str) -> str | None:
+                    """Ask the user a question during buildapp; return their reply or None on skip/timeout."""
+                    view = SkipDataInterviewView()
+                    q_msg = await channel.send(question, view=view)
+                    pair = (channel.id, message.author.id)
+                    _interview_pending.add(pair)
+
+                    def check(m: discord.Message) -> bool:
+                        return (
+                            m.channel.id == channel.id
+                            and m.author.id == message.author.id
+                            and not m.content.startswith("/")
+                            and not m.content.startswith("@")
+                        )
+
+                    try:
+                        wait_msg = asyncio.ensure_future(
+                            client.wait_for("message", check=check, timeout=120)
+                        )
+                        wait_skip = asyncio.ensure_future(view.wait())
+                        done, pending = await asyncio.wait(
+                            {wait_msg, wait_skip}, return_when=asyncio.FIRST_COMPLETED
+                        )
+                        for t in pending:
+                            t.cancel()
+
+                        if wait_msg in done:
+                            reply = wait_msg.result()
+                            view.stop()
+                            await q_msg.edit(view=None)
+                            return reply.content.strip() or None
+                        # Skip button pressed or timeout
+                        await q_msg.edit(view=None)
+                        return None
+                    except asyncio.TimeoutError:
+                        await q_msg.edit(view=None)
+                        return None
+                    finally:
+                        _interview_pending.discard(pair)
+
+                slug = await buildapp.handle_buildapp(
+                    cmd.raw_cmd or "", registry, claude, ba_status, on_ask=ba_ask
+                )
                 if slug:
                     registry.set_default(message.author.id, slug)
                     await send(channel, f"📂 Switched to **{slug}**")
@@ -679,6 +762,19 @@ async def on_message(message: discord.Message):
                     else:
                         await send(channel, f"❌ {platform.upper()} build failed:\n```\n{result.error[:1200]}\n```")
 
+        case "platform":
+            if cmd.platform and cmd.platform in ("ios", "android", "web"):
+                registry.set_platform(message.author.id, cmd.platform)
+                reply = f"✅ Default demo platform set to **{cmd.platform}**."
+                if cmd.platform == "ios":
+                    reply += "\n💡 For native iOS builds, you'll need an Apple Developer account ($99/yr). Use `/testflight` to distribute to your phone."
+                await send(channel, reply)
+            elif cmd.platform:
+                await send(channel, "❌ Unknown platform. Use `/platform ios`, `android`, or `web`.")
+            else:
+                current = registry.get_platform(message.author.id)
+                await send(channel, f"📱 Your demo platform: **{current or 'web (default)'}**\nChange with `/platform ios`, `android`, or `web`.")
+
         case "demo":
             if not config.AGENT_MODE:
                 await send(channel, "🔒 Agent mode OFF.")
@@ -690,10 +786,9 @@ async def on_message(message: discord.Message):
                     # /demo android, /demo ios, /demo web → run directly
                     await _run_demo(channel, ws_key, ws_path, cmd.platform)
                 else:
-                    # /demo → show platform picker buttons
-                    view = DemoPlatformView(message.author.id, ws_key, ws_path)
-                    await channel.send(
-                        f"📱 Demo **{ws_key}** — pick a platform:", view=view)
+                    # /demo → auto-pick from preference, default to web
+                    platform = registry.get_platform(message.author.id) or "web"
+                    await _run_demo(channel, ws_key, ws_path, platform)
 
         case "deploy":
             if not config.AGENT_MODE:

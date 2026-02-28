@@ -32,7 +32,7 @@ generate a PostgreSQL schema for Supabase.
 
 App name: {app_name}
 Description: {description}
-
+{data_section}
 Rules:
 - Output ONLY a single SQL block (```sql ... ```) — no explanation.
 - Use CREATE TABLE IF NOT EXISTS.
@@ -111,6 +111,7 @@ async def handle_buildapp(
     registry: WorkspaceRegistry,
     claude: ClaudeRunner,
     on_status: Callable[[str, Optional[str]], Awaitable[None]],
+    on_ask: Optional[Callable[[str], Awaitable[Optional[str]]]] = None,
 ) -> Optional[str]:
     if not description:
         await on_status("Usage: `/buildapp <description of the app>`", None)
@@ -135,11 +136,32 @@ async def handle_buildapp(
         await on_status(f"❌ Could not find workspace `{slug}`.", None)
         return None
 
+    # 1.5 Data-modeling interview (only when Supabase is configured)
+    data_description: Optional[str] = None
+    if config.SUPABASE_PROJECT_REF and config.SUPABASE_MANAGEMENT_KEY and on_ask:
+        question = (
+            "**What data does your app need to store?**\n"
+            "Describe what users create or manage. For example:\n"
+            "*Each recipe has a title, ingredients list, cook time, and photo.*\n\n"
+            "This helps me design a better database. Or hit **Skip** to let me figure it out from the description."
+        )
+        data_description = await on_ask(question)
+        if data_description:
+            await on_status("Got it — designing the database around your data description.", None)
+
     # 2. Supabase schema (if configured)
     schema_sql = None
     if config.SUPABASE_PROJECT_REF and config.SUPABASE_MANAGEMENT_KEY:
         await on_status("🗄️ Designing database schema...", None)
-        schema_prompt = SCHEMA_PROMPT.format(description=description, app_name=app_name)
+        data_section = ""
+        if data_description:
+            data_section = (
+                f"User's data requirements:\n{data_description}\n"
+                "Use these as the primary guide for table and column design."
+            )
+        schema_prompt = SCHEMA_PROMPT.format(
+            description=description, app_name=app_name, data_section=data_section
+        )
         schema_result = await claude.run(schema_prompt, slug, ws_path)
         schema_sql = extract_sql(schema_result.stdout)
 
