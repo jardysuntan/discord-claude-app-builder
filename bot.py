@@ -97,12 +97,73 @@ class ConfirmDeleteView(discord.ui.View):
         pass
 
 
+class EditSaveDescriptionModal(discord.ui.Modal, title="Edit save description"):
+    """Modal to edit the auto-generated save description before committing."""
+
+    description_input = discord.ui.TextInput(
+        label="Description",
+        style=discord.TextStyle.short,
+        max_length=80,
+        placeholder="e.g. added dark mode toggle",
+    )
+
+    def __init__(self, view: "SaveConfirmView"):
+        super().__init__()
+        self.save_view = view
+        self.description_input.default = view.description
+
+    async def on_submit(self, interaction: discord.Interaction):
+        new_desc = self.description_input.value.strip()[:80]
+        self.save_view.stop()
+        result = await git_cmd.commit_save(
+            self.save_view.ws_path, self.save_view.save_number, new_desc,
+        )
+        await interaction.response.edit_message(content=result, view=None)
+
+
+class SaveConfirmView(discord.ui.View):
+    """Preview save description with Save / Edit buttons."""
+
+    def __init__(self, ws_path: str, owner_id: int, save_number: int, description: str):
+        super().__init__(timeout=60)
+        self.ws_path = ws_path
+        self.owner_id = owner_id
+        self.save_number = save_number
+        self.description = description
+
+    @discord.ui.button(label="Save", style=discord.ButtonStyle.success)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.owner_id:
+            return await interaction.response.send_message("Not your command.", ephemeral=True)
+        self.stop()
+        result = await git_cmd.commit_save(self.ws_path, self.save_number, self.description)
+        await interaction.response.edit_message(content=result, view=None)
+
+    @discord.ui.button(label="Edit description", style=discord.ButtonStyle.secondary)
+    async def edit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.owner_id:
+            return await interaction.response.send_message("Not your command.", ephemeral=True)
+        await interaction.response.send_modal(EditSaveDescriptionModal(self))
+
+    async def on_timeout(self):
+        # Unstage changes so nothing is left half-committed
+        await git_cmd._git(["reset", "HEAD"], self.ws_path)
+        try:
+            await self.message.edit(
+                content="⏰ Save cancelled (timed out). Your changes are still there — run `/save` again.",
+                view=None,
+            )
+        except Exception:
+            pass
+
+
 class WorkspaceSelectorView(discord.ui.View):
     """Shows workspace buttons for switching."""
 
     def __init__(self, owner_id: int, keys: list[str]):
         super().__init__(timeout=60)
         self.owner_id = owner_id
+        self.footer_message = None  # set after footer is sent, so button can edit it
         current = registry.get_default(owner_id)
         for key in keys[:20]:
             style = discord.ButtonStyle.primary if key == current else discord.ButtonStyle.secondary
@@ -123,6 +184,12 @@ class WorkspaceButton(discord.ui.Button):
         registry.set_default(self.owner_id, self.ws_key)
         await interaction.response.edit_message(
             content=f"Switched to **{self.ws_key}**.", view=None)
+        # Update the workspace footer below if it exists
+        if self.view and hasattr(self.view, 'footer_message') and self.view.footer_message:
+            try:
+                await self.view.footer_message.edit(content=f"📂 workspace: **{self.ws_key}**")
+            except Exception:
+                pass
 
 
 # ── Data-interview guard ─────────────────────────────────────────────────
@@ -382,11 +449,14 @@ class QueueBuilderView(discord.ui.View):
         pass
 
 
-async def send_workspace_footer(channel, user_id: int):
+async def send_workspace_footer(channel, user_id: int, selector_view=None):
     """Send plain-text workspace indicator, or selector buttons when none is set."""
     ws = registry.get_default(user_id)
     if ws:
-        await channel.send(f"📂 workspace: **{ws}**")
+        msg = await channel.send(f"📂 workspace: **{ws}**")
+        # Link footer to selector so button click can edit it
+        if selector_view is not None:
+            selector_view.footer_message = msg
     else:
         keys = registry.list_keys()
         if keys:
@@ -412,6 +482,11 @@ def help_text():
         "`/use <ws>` · `/ls` — switch / list workspaces\n"
         "`/create <Name>` — scaffold new project\n"
         "`/remove <ws>` · `/rename <old> <new>`\n\n"
+        "**Save:**\n"
+        "`/save` — save your progress (all platforms)\n"
+        "`/save list` — see your save history\n"
+        "`/save undo` · `/save redo`\n"
+        "`/save github` — upload to GitHub\n\n"
         "**Git:**\n"
         "`/status` · `/diff` · `/commit [msg]` · `/log`\n"
         "`/branch [name]` · `/stash` · `/pr [title]`\n"
@@ -621,6 +696,7 @@ async def on_message(message: discord.Message):
         return
 
     cmd = parsed
+    _active_selector_view = None  # track WorkspaceSelectorView for footer linking
 
     match cmd.name:
         case "help":
@@ -631,6 +707,7 @@ async def on_message(message: discord.Message):
             if keys:
                 view = WorkspaceSelectorView(message.author.id, keys)
                 await channel.send("**Workspaces:**", view=view)
+                _active_selector_view = view
             else:
                 await send(channel, "No workspaces.")
 
@@ -922,6 +999,40 @@ async def on_message(message: discord.Message):
                 else:
                     await send(channel, await run_cmd.handle_runsh(cmd.raw_cmd or "", ws_path))
 
+        # ── Save (game-save-style versioning) ─────────────────────
+        case "save":
+            ws_key, ws_path = registry.resolve(None, message.author.id)
+            if not ws_path:
+                await send(channel, "❌ No workspace set.")
+            else:
+                match cmd.sub:
+                    case "list":
+                        await send(channel, await git_cmd.handle_save_list(ws_path))
+                    case "undo":
+                        await send(channel, await git_cmd.handle_save_undo(ws_path))
+                    case "redo":
+                        await send(channel, await git_cmd.handle_save_redo(ws_path))
+                    case "github":
+                        await send(channel, await git_cmd.handle_save_github(ws_path, ws_key))
+                    case _:
+                        if cmd.raw_cmd:
+                            # Custom message: save directly, no preview
+                            await send(channel, await git_cmd.handle_save(
+                                ws_path, ws_key, claude=claude, custom_msg=cmd.raw_cmd))
+                        else:
+                            # No message: preview with confirm/edit buttons
+                            result = await git_cmd.prepare_save(ws_path, ws_key, claude=claude)
+                            if isinstance(result, str):
+                                await send(channel, result)
+                            else:
+                                num, description = result
+                                view = SaveConfirmView(ws_path, message.author.id, num, description)
+                                preview = (
+                                    f"💾 **Save {num}** — {description}\n"
+                                    f"-# Click Save to confirm, or edit the description first."
+                                )
+                                view.message = await channel.send(preview, view=view)
+
         # ── Git & GitHub ─────────────────────────────────────────
         case "gitstatus":
             ws_key, ws_path = registry.resolve(None, message.author.id)
@@ -1136,7 +1247,7 @@ async def on_message(message: discord.Message):
             await send(channel, "❓ Unknown command. `/help`")
 
     # Workspace footer — always show after every command
-    await send_workspace_footer(channel, message.author.id)
+    await send_workspace_footer(channel, message.author.id, selector_view=_active_selector_view)
 
 
 # ── Run ──────────────────────────────────────────────────────────────────────
