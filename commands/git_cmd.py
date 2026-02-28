@@ -524,13 +524,12 @@ async def handle_save(
     return await commit_save(ws_path, num, description)
 
 
-async def handle_save_list(ws_path: str) -> str:
-    """Show numbered save history with relative dates."""
+async def get_saves(ws_path: str) -> list[tuple[int, str, str]]:
+    """Return list of (num, description, iso_date) sorted newest-first, or empty list."""
     _, tags_out = await _git(["tag", "--list", "save-*"], ws_path)
     if not tags_out.strip():
-        return "No saves yet. Use `/save` to save your progress!"
+        return []
 
-    # Collect save tags with their commit info
     saves = []
     for tag in tags_out.strip().splitlines():
         tag = tag.strip()
@@ -538,14 +537,8 @@ async def handle_save_list(ws_path: str) -> str:
         if not m:
             continue
         num = int(m.group(1))
-        # Get commit message and date for this tag
-        _, msg = await _git(
-            ["log", "-1", "--format=%s", tag], ws_path
-        )
-        _, date = await _git(
-            ["log", "-1", "--format=%aI", tag], ws_path
-        )
-        # Strip "Save N: " prefix from message for display
+        _, msg = await _git(["log", "-1", "--format=%s", tag], ws_path)
+        _, date = await _git(["log", "-1", "--format=%aI", tag], ws_path)
         desc = msg.strip()
         prefix = f"Save {num}: "
         if desc.startswith(prefix):
@@ -553,13 +546,20 @@ async def handle_save_list(ws_path: str) -> str:
         saves.append((num, desc, date.strip()))
 
     saves.sort(key=lambda x: x[0], reverse=True)
+    return saves
+
+
+async def handle_save_list(ws_path: str) -> tuple[str, list[tuple[int, str, str]]]:
+    """Show numbered save history. Returns (message, saves_list)."""
+    saves = await get_saves(ws_path)
+    if not saves:
+        return "No saves yet. Use `/save` to save your progress!", []
 
     lines = ["📋 **Save History**\n"]
     for num, desc, date in saves:
         rel = _relative_date(date)
         lines.append(f"**{num}.** {desc} — *{rel}*")
 
-    # Footer: current state
     _, status = await _git(["status", "--porcelain"], ws_path)
     if status.strip():
         lines.append(f"\n⚠️ You have unsaved changes.")
@@ -568,7 +568,38 @@ async def handle_save_list(ws_path: str) -> str:
         if cur > 0:
             lines.append(f"\n✨ You're on **Save {cur}**.")
 
-    return "\n".join(lines)
+    return "\n".join(lines), saves
+
+
+async def load_save(ws_path: str, target_num: int) -> str:
+    """Restore files from save-N and commit as a new save."""
+    # Verify the target tag exists
+    rc, _ = await _git(["rev-parse", f"save-{target_num}"], ws_path)
+    if rc != 0:
+        return f"❌ Save {target_num} not found."
+
+    cur = await _current_save_number(ws_path)
+    if target_num == cur:
+        return f"✨ You're already on **Save {target_num}**."
+
+    # Restore all files to the state of that save
+    rc, out = await _git(["checkout", f"save-{target_num}", "--", "."], ws_path)
+    if rc != 0:
+        return f"❌ Failed to load save:\n```\n{out[:500]}\n```"
+
+    # Stage everything and commit as a new save
+    await _git(["add", "-A"], ws_path)
+    new_num = await _next_save_number(ws_path)
+
+    # Get the original description
+    _, orig_msg = await _git(["log", "-1", "--format=%s", f"save-{target_num}"], ws_path)
+    orig_desc = orig_msg.strip()
+    prefix = f"Save {target_num}: "
+    if orig_desc.startswith(prefix):
+        orig_desc = orig_desc[len(prefix):]
+
+    description = f"loaded Save {target_num} ({orig_desc})"
+    return await commit_save(ws_path, new_num, description)
 
 
 async def handle_save_undo(ws_path: str) -> str:

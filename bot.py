@@ -157,6 +157,75 @@ class SaveConfirmView(discord.ui.View):
             pass
 
 
+class SaveListView(discord.ui.View):
+    """Save history with a dropdown to load any previous save."""
+
+    def __init__(self, owner_id: int, ws_path: str, saves: list[tuple[int, str, str]]):
+        super().__init__(timeout=120)
+        self.owner_id = owner_id
+        self.ws_path = ws_path
+        self.selected_num = None
+        # Build select options (max 25 in a Select)
+        select = discord.ui.Select(
+            placeholder="Load a previous save…",
+            min_values=1, max_values=1,
+        )
+        for num, desc, date in saves[:25]:
+            rel = git_cmd._relative_date(date)
+            label = f"Save {num}"
+            select.append_option(discord.SelectOption(
+                label=label,
+                description=f"{desc[:50]} — {rel}",
+                value=str(num),
+            ))
+        select.callback = self._on_select
+        self.add_item(select)
+
+    async def _on_select(self, interaction: discord.Interaction):
+        if interaction.user.id != self.owner_id:
+            return await interaction.response.send_message("Not your command.", ephemeral=True)
+        self.selected_num = int(interaction.data["values"][0])
+        # Show confirmation
+        self.clear_items()
+        self.add_item(ConfirmLoadButton(self))
+        self.add_item(CancelLoadButton(self))
+        await interaction.response.edit_message(
+            content=f"⏪ Load **Save {self.selected_num}**? This creates a new save with that version's files.",
+            view=self,
+        )
+
+    async def on_timeout(self):
+        try:
+            await self.message.edit(view=None)
+        except Exception:
+            pass
+
+
+class ConfirmLoadButton(discord.ui.Button):
+    def __init__(self, parent: SaveListView):
+        super().__init__(label="Load", style=discord.ButtonStyle.success)
+        self.parent_view = parent
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.parent_view.owner_id:
+            return await interaction.response.send_message("Not your command.", ephemeral=True)
+        self.parent_view.stop()
+        result = await git_cmd.load_save(self.parent_view.ws_path, self.parent_view.selected_num)
+        await interaction.response.edit_message(content=result, view=None)
+
+
+class CancelLoadButton(discord.ui.Button):
+    def __init__(self, parent: SaveListView):
+        super().__init__(label="Cancel", style=discord.ButtonStyle.secondary)
+        self.parent_view = parent
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.parent_view.owner_id:
+            return await interaction.response.send_message("Not your command.", ephemeral=True)
+        self.parent_view.stop()
+        await interaction.response.edit_message(content="Cancelled.", view=None)
+
+
 class WorkspaceSelectorView(discord.ui.View):
     """Shows workspace buttons for switching."""
 
@@ -1007,7 +1076,12 @@ async def on_message(message: discord.Message):
             else:
                 match cmd.sub:
                     case "list":
-                        await send(channel, await git_cmd.handle_save_list(ws_path))
+                        text, saves = await git_cmd.handle_save_list(ws_path)
+                        if saves and len(saves) > 1:
+                            view = SaveListView(message.author.id, ws_path, saves)
+                            view.message = await channel.send(text, view=view)
+                        else:
+                            await send(channel, text)
                     case "undo":
                         await send(channel, await git_cmd.handle_save_undo(ws_path))
                     case "redo":
