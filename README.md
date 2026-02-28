@@ -2,23 +2,6 @@
 
 A Discord bot that turns natural language into production-quality cross-platform apps. Describe what you want, and it scaffolds a Kotlin Multiplatform project, has Claude Code write the code, auto-fixes build errors, and demos the result on Android, iOS, and Web — all from your phone.
 
-## Why this is different
-
-Every AI app builder can generate code that compiles. This one generates apps that **feel real** — because the platform encodes years of production mobile engineering into every app it creates.
-
-Most AI-generated apps are demos: no error handling, no loading states, no offline support, no thought given to what happens when the network drops or the user hits an edge case. Non-engineers don't know to ask for these things, but they notice immediately when an app feels broken.
-
-This bot bridges that gap. It takes a naive app idea and automatically covers the edge cases that separate a toy from a real app:
-
-- **Network error handling** — retry logic, graceful degradation, offline-friendly patterns
-- **Validation and error states** — input validation, meaningful error messages, recovery flows
-- **Production UX patterns** — skeleton loaders, pull-to-refresh, optimistic updates, smooth transitions
-- **Platform-native navigation** — proper back stack, deep linking, platform-appropriate patterns for iOS and Android
-- **Auto-provisioned backend** — Supabase tables, RLS policies, and API wiring generated and deployed from a single prompt, with SQL guardrails that block destructive operations and ensure idempotent re-runs
-- **Real build pipeline** — auto-fix loops that detect build errors AND runtime crashes, with fix memory so the same mistake never happens twice
-
-The result: a non-engineer says "build me a workout tracker" and gets an app that works offline, handles errors gracefully, and feels native on every platform — not a skeleton that crashes when you turn off wifi.
-
 <table>
   <tr>
     <td align="center">
@@ -37,6 +20,10 @@ The result: a non-engineer says "build me a workout tracker" and gets an app tha
 
 
 </table>
+
+### What makes this different
+
+You don't need to think about the technical stuff. The bot is built on years of production mobile engineering experience, so it knows what makes apps feel real — error handling, loading states, offline support, platform-native navigation, smooth transitions. You just describe your idea and the bot takes care of the rest. It also auto-provisions a database, auto-fixes build errors, and remembers past fixes so it keeps getting better.
 
 ---
 
