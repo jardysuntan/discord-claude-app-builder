@@ -20,7 +20,7 @@ from commands import run_cmd, memory_cmd, buildapp, fix, queue, widget, fixes_cm
 from commands import git_cmd
 from commands.bot_todo import handle_bot_todo
 from commands.dashboard import handle_dashboard
-from commands.testflight import handle_testflight
+from commands.testflight import handle_testflight, TestFlightResult
 from cost_tracker import CostTracker
 from commands.create import create_kmp_project
 from agent_loop import run_agent_loop, format_loop_summary
@@ -279,6 +279,27 @@ class SkipDataInterviewView(discord.ui.View):
         self.skipped = True
         self.stop()
         await interaction.response.defer()
+
+
+class CancelRequestView(discord.ui.View):
+    """Cancel button shown while Claude is processing a request."""
+
+    def __init__(self, owner_id: int, ws_key: str):
+        super().__init__(timeout=None)
+        self.owner_id = owner_id
+        self.ws_key = ws_key
+        self.cancelled = False
+
+    @discord.ui.button(label="Cancel request", style=discord.ButtonStyle.danger)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.owner_id:
+            return await interaction.response.send_message("Not your command.", ephemeral=True)
+        self.cancelled = True
+        claude.cancel(self.ws_key)
+        self.stop()
+        await interaction.response.edit_message(
+            content="🛑 Request cancelled.", view=None,
+        )
 
 
 STILL_LISTENING = "💡 *I'm still listening — feel free to send other commands while this runs.*"
@@ -666,6 +687,188 @@ class DemoPlatformView(discord.ui.View):
         await _run_demo(interaction.channel, self.ws_key, self.ws_path, "web")
 
 
+class TestFlightSetupView(discord.ui.View):
+    """Prompt to create app in App Store Connect, then retry /testflight."""
+
+    def __init__(self, owner_id: int, ws_key: str, ws_path: str,
+                 app_name: str, bundle_id: str):
+        super().__init__(timeout=300)
+        self.owner_id = owner_id
+        self.ws_key = ws_key
+        self.ws_path = ws_path
+        self.app_name = app_name
+        self.bundle_id = bundle_id
+        # Link button to App Store Connect (link buttons don't need a callback)
+        self.add_item(discord.ui.Button(
+            label="Open App Store Connect",
+            style=discord.ButtonStyle.link,
+            url="https://appstoreconnect.apple.com/apps",
+            emoji="🔗",
+        ))
+
+    @discord.ui.button(label="Retry /testflight", style=discord.ButtonStyle.success, emoji="🚀")
+    async def retry(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.owner_id:
+            return await interaction.response.send_message("Not your command.", ephemeral=True)
+        self.stop()
+        await interaction.response.edit_message(view=None)
+        ch = interaction.channel
+        async def tf_status(msg, fpath=None):
+            await send(ch, msg, file_path=fpath)
+        result = await handle_testflight(self.ws_key, self.ws_path, on_status=tf_status)
+        if result and result.needs_setup:
+            embed, view = _testflight_setup_embed(
+                self.owner_id, self.ws_key, self.ws_path,
+                result.app_name, result.bundle_id,
+            )
+            await ch.send(embed=embed, view=view)
+
+    async def on_timeout(self):
+        try:
+            for item in self.children:
+                item.disabled = True
+        except Exception:
+            pass
+
+
+def _testflight_setup_embed(owner_id, ws_key, ws_path, app_name, bundle_id):
+    """Build the embed + view for TestFlight app setup."""
+    embed = discord.Embed(
+        title="📲 One-time App Store Connect setup",
+        description=(
+            "Apple requires creating the app record on their website.\n"
+            "This only needs to be done **once per app** — takes about 30 seconds.\n\n"
+            "💡 *Right-click the link below → **Open in Browser** "
+            "(Discord's built-in browser can be flaky).*"
+        ),
+        color=0x0A84FF,  # iOS blue
+    )
+    embed.add_field(
+        name="Step 1",
+        value='Click **Open App Store Connect** below, then tap **＋** → **New App**',
+        inline=False,
+    )
+    embed.add_field(
+        name="Step 2",
+        value=(
+            f"**Name:** `{app_name}` *(common names are often taken — "
+            "try something like \"{app_name} App\" or \"{app_name} by You\". "
+            "It's just a display label, you can change it anytime)*\n"
+            f"**Bundle ID:** select `{bundle_id}`\n"
+            f"**SKU:** `{bundle_id}`\n"
+            "**Access:** Full Access"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Step 3",
+        value=(
+            "Click **Create**, then come back here and tap **Retry**.\n\n"
+            "⚠️ **Do NOT click \"Add for Review\"** — that submits to the public App Store "
+            "under Jared's developer account. For now, just use TestFlight for testing. "
+            "App Store submission will be available later once we add app readiness checks "
+            "and support for your own Apple Developer account."
+        ),
+        inline=False,
+    )
+    view = TestFlightSetupView(owner_id, ws_key, ws_path, app_name, bundle_id)
+    return embed, view
+
+
+def _testflight_success_embed(workspace_key: str, bundle_id: str) -> discord.Embed:
+    """Info embed shown after a successful TestFlight upload."""
+    embed = discord.Embed(
+        title="🎉 Your app is on its way to TestFlight!",
+        description=(
+            "Apple is processing the build — this usually takes **5-30 minutes**.\n"
+            "I'll send a message here when it's ready. "
+            "Apple will also email `jared.e.tan@gmail.com`."
+        ),
+        color=0x34C759,  # iOS green
+    )
+    embed.add_field(
+        name="What happens next",
+        value=(
+            "1. Apple processes the build (**5-30 min** — you don't need to do anything)\n"
+            "2. You'll receive an email: **\"has completed processing\"**\n"
+            "3. Go to [App Store Connect](https://appstoreconnect.apple.com/apps) "
+            f"→ **{workspace_key}** → **TestFlight**\n"
+            "4. **First time only:** click **Manage** next to the build "
+            "→ select **No** for encryption → **Save**\n"
+            "5. The build is now available for testers!"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Inviting testers",
+        value=(
+            "1. In the TestFlight tab, add **internal testers** (your team) or "
+            "create a **public link** anyone can use\n"
+            "2. Testers install the free "
+            "**[TestFlight app](https://apps.apple.com/app/testflight/id899247664)** "
+            "(one-time)\n"
+            "3. They tap the invite link → app installs in seconds\n"
+            "4. Future `/testflight` updates show up automatically — "
+            "testers get a push notification"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Pushing updates",
+        value=(
+            f"Just run `/testflight` again — `{bundle_id}` is already set up, "
+            "so it skips straight to building and uploading. "
+            "Testers see the new version automatically."
+        ),
+        inline=False,
+    )
+    return embed
+
+
+def _ios_deploy_info_embed() -> discord.Embed:
+    """Info embed explaining how iOS deployment works via TestFlight."""
+    embed = discord.Embed(
+        title="🍎 Deploying to iOS",
+        description="Here's how your app gets from Discord to people's iPhones.",
+        color=0x0A84FF,
+    )
+    embed.add_field(
+        name="How it works",
+        value=(
+            "1. Build your app with `@workspace` prompts — preview it live on the web\n"
+            "2. When ready, run `/testflight` — the bot archives, signs, and uploads to Apple\n"
+            "3. Apple processes the build (~5-30 min the first time)\n"
+            "4. Share an invite link — testers install it natively on their iPhone\n"
+            "5. Every future `/testflight` pushes an update — testers get it automatically"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="What testers need",
+        value=(
+            "Just the free **[TestFlight](https://apps.apple.com/app/testflight/id899247664)** "
+            "app and an invite link. No Apple Developer account, no Xcode, no fees. "
+            "Builds expire after 90 days."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="TestFlight vs App Store",
+        value=(
+            "**TestFlight** is for testing and demos — up to 100 testers, "
+            "no Apple review, builds shared instantly. "
+            "All TestFlight builds go through the bot operator's account at no cost to testers.\n\n"
+            "**App Store** publication requires your own "
+            "**[Apple Developer Program](https://developer.apple.com/programs/)** "
+            "account ($99/year). Apple reviews every submission and the account holder "
+            "is legally responsible for the app. "
+            "Multi-user App Store support is coming soon."
+        ),
+        inline=False,
+    )
+    return embed
+
+
 class AddQueueTaskModal(discord.ui.Modal, title="Add a task"):
     """Modal popup with a text field for one queue task."""
 
@@ -904,7 +1107,10 @@ async def on_message(message: discord.Message):
         if not ws_path:
             return await send(channel, f"❌ Workspace `{ws_key}` not found.")
 
-        await send(channel, f"🧠 Thinking in **{ws_key}**…")
+        cancel_view = CancelRequestView(message.author.id, ws_key)
+        cancel_msg = await channel.send(
+            f"🧠 Thinking in **{ws_key}**…", view=cancel_view,
+        )
         await send(channel, STILL_LISTENING)
 
         # Snapshot SQL files before Claude runs (for auto-sync)
@@ -916,6 +1122,18 @@ async def on_message(message: discord.Message):
             await send(channel, msg)
 
         result = await claude.run(prompt, ws_key, ws_path, on_progress=claude_progress)
+
+        # Remove cancel button now that Claude is done
+        try:
+            await cancel_msg.edit(
+                content=f"🧠 Thinking in **{ws_key}**… done.", view=None,
+            )
+        except Exception:
+            pass
+
+        if cancel_view.cancelled:
+            return await send(channel, "🛑 Request was cancelled.")
+
         cost_tracker.add(result.total_cost_usd)
         if result.exit_code != 0:
             error_detail = result.stderr.strip() or result.stdout.strip() or ""
@@ -980,6 +1198,30 @@ async def on_message(message: discord.Message):
                     url = await WebPlatform.serve(ws_path)
                     if url:
                         await send(channel, f"✅ Web fixed → {url}")
+
+            # Auto-preview: build + screenshot for user's preferred platform
+            user_platform = registry.get_platform(message.author.id)
+            if user_platform in ("ios", "android"):
+                await send(channel, f"📸 Auto-previewing on {user_platform}…")
+                preview_build = await build_platform(user_platform, ws_path)
+                if preview_build.success:
+                    try:
+                        if user_platform == "ios":
+                            await iOSPlatform.install_and_launch(ws_path)
+                        else:
+                            await AndroidPlatform.install(ws_path)
+                            await AndroidPlatform.launch(ws_path)
+                        await asyncio.sleep(2)
+                        shot = await (iOSPlatform if user_platform == "ios" else AndroidPlatform).screenshot()
+                        if shot:
+                            await send(channel, f"✅ {user_platform.upper()} preview:", file_path=shot)
+                        else:
+                            await send(channel, f"⚠️ {user_platform.upper()} screenshot failed.")
+                    except Exception as e:
+                        await send(channel, f"⚠️ {user_platform.upper()} preview error: {str(e)[:200]}")
+                else:
+                    await send(channel, f"⚠️ {user_platform.upper()} build failed — use `/demo` to auto-fix.")
+
         await send_workspace_footer(channel, message.author.id)
         return
 
@@ -1134,10 +1376,9 @@ async def on_message(message: discord.Message):
         case "platform":
             if cmd.platform and cmd.platform in ("ios", "android", "web"):
                 registry.set_platform(message.author.id, cmd.platform)
-                reply = f"✅ Default demo platform set to **{cmd.platform}**."
+                await send(channel, f"✅ Default demo platform set to **{cmd.platform}**.")
                 if cmd.platform == "ios":
-                    reply += "\n💡 For native iOS builds, you'll need an Apple Developer account ($99/yr). Use `/testflight` to distribute to your phone."
-                await send(channel, reply)
+                    await channel.send(embed=_ios_deploy_info_embed())
             elif cmd.platform:
                 await send(channel, "❌ Unknown platform. Use `/platform ios`, `android`, or `web`.")
             else:
@@ -1153,6 +1394,12 @@ async def on_message(message: discord.Message):
                     await send(channel, "❌ No workspace set.")
                 elif cmd.platform:
                     # /demo android, /demo ios, /demo web → run directly
+                    prev = registry.get_platform(message.author.id)
+                    if prev != cmd.platform:
+                        registry.set_platform(message.author.id, cmd.platform)
+                        await send(channel, f"📌 **{cmd.platform.upper()}** is now your preferred demo platform.")
+                        if cmd.platform == "ios":
+                            await channel.send(embed=_ios_deploy_info_embed())
                     await _run_demo(channel, ws_key, ws_path, cmd.platform)
                 else:
                     # /demo → auto-pick from preference, default to web
@@ -1188,7 +1435,17 @@ async def on_message(message: discord.Message):
                 else:
                     async def tf_status(msg, fpath=None):
                         await send(channel, msg, file_path=fpath)
-                    await handle_testflight(ws_key, ws_path, on_status=tf_status)
+                    result = await handle_testflight(ws_key, ws_path, on_status=tf_status)
+                    if result and result.needs_setup:
+                        embed, view = _testflight_setup_embed(
+                            message.author.id, ws_key, ws_path,
+                            result.app_name, result.bundle_id,
+                        )
+                        await channel.send(embed=embed, view=view)
+                    elif result and result.success:
+                        await channel.send(embed=_testflight_success_embed(
+                            ws_key, result.bundle_id,
+                        ))
 
         case "vid":
             if not config.AGENT_MODE:

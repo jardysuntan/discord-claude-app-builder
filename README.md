@@ -353,12 +353,28 @@ export TAILSCALE_HOSTNAME=100.x.x.x
 
 ## Roadmap
 
-- [ ] **LLM selection** — let users choose their LLM provider (with subscription info)
+- [x] **Game-save-style versioning** — `/save`, `/save list`, `/save undo`, `/save redo`, `/save github`
+- [x] **Android + Web crash/health detection** — auto-fix pipelines for all three platforms (logcat crash detection, HTTP health checks)
+- [ ] **Screenshot-to-UI** — upload a design mockup in Discord, bot generates matching KMP UI (Claude multimodal)
+- [ ] **Auto-preview after edits** — automatically screenshot and send after every `@workspace` prompt
+- [ ] **App template gallery** — curated starting points (social feed, e-commerce, chat, dashboard, game)
+- [ ] **Public web deploy** — `/deploy web` pushes to Netlify/Vercel/CF Pages (nice-to-have sharing link)
+- [ ] **Security scan** — `/security` checks for exposed keys, missing RLS policies, OWASP issues
 - [ ] **Data modeling interview** — conversational flow in `/buildapp` that helps non-engineers describe their data needs, then auto-provisions Supabase tables
-- [ ] **OAuth onboarding** — "click this link" flows for Supabase, Apple, Google, and Claude API so non-engineers don't have to copy-paste API keys
-- [ ] **Multi-user support** — let others build apps too (currently owner-only for builds)
+- [ ] **Stripe/payments integration** — auto-scaffold checkout flows for native apps
 - [ ] **Automated TestFlight tester invites** — bot adds testers via App Store Connect API
-- [ ] **Android crash detection** — match the iOS crash-detect-and-fix flow for Android demos
+- [ ] **Google Play internal testing** — `/deploy android play` for Android equivalent of TestFlight
+
+### Multi-user TODO
+
+Everything needed before other people can use the bot:
+
+- [ ] **Per-user GitHub tokens** — `/save github` currently uses the host machine's `gh` auth. Each user needs their own token, stored in config/DB and passed via env to `gh` calls (or a `/save github connect <token>` flow)
+- [ ] **Multi-user workspace isolation** — let multiple users build apps simultaneously (currently owner-only via `DISCORD_ALLOWED_USER_ID`)
+- [ ] **OAuth onboarding** — "click this link" flows for Supabase, Apple, Google, and Claude API so non-engineers don't have to copy-paste API keys
+- [ ] **LLM selection** — let users choose their LLM provider (with subscription info)
+- [ ] **Per-user spend tracking** — budget and cost tracking scoped per user, not global
+- [ ] **Per-user Claude sessions** — isolate Claude context so one user's prompts don't leak into another's
 
 ## Follow-ups
 

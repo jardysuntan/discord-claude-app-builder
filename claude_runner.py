@@ -150,8 +150,18 @@ class ClaudeRunner:
     def __init__(self):
         self._sessions: dict[str, str] = {}
         self._run_durations: dict[str, list[float]] = {}  # workspace → last N durations
+        self._active_procs: dict[str, asyncio.subprocess.Process] = {}
         self._claude_bin = _resolve_claude_bin()
         print(f"  Claude binary:   {self._claude_bin}")
+
+    def cancel(self, workspace: str) -> bool:
+        """Kill the active Claude process for a workspace. Returns True if killed."""
+        proc = self._active_procs.pop(workspace, None)
+        if proc and proc.returncode is None:
+            proc.kill()
+            print(f"[claude] Cancelled: workspace={workspace} pid={proc.pid}")
+            return True
+        return False
 
     def _record_duration(self, workspace: str, duration: float):
         """Record a run duration for ETA estimates."""
@@ -201,6 +211,7 @@ class ClaudeRunner:
 
         try:
             env = {**os.environ, "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "128000"}
+            env.pop("CLAUDECODE", None)
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdin=asyncio.subprocess.DEVNULL,
@@ -210,6 +221,7 @@ class ClaudeRunner:
                 env=env,
                 limit=10 * 1024 * 1024,  # 10MB — default 64KB is too small for large stream-json events
             )
+            self._active_procs[workspace_key] = proc
             print(f"[claude] Process started: pid={proc.pid}")
 
             result_text = ""
@@ -334,6 +346,8 @@ class ClaudeRunner:
         except Exception as e:
             print(f"[claude] Exception: {e}")
             return ClaudeResult(stdout="", stderr=str(e), exit_code=-1)
+        finally:
+            self._active_procs.pop(workspace_key, None)
 
         exit_code = proc.returncode or 0
         run_duration = time.time() - run_start_time
