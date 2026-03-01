@@ -175,6 +175,28 @@ class AndroidPlatform:
         return tmp.name if rc == 0 else None
 
     @staticmethod
+    async def clear_logcat():
+        """Clear logcat buffer for clean crash detection."""
+        await _run([config.ADB_BIN, "logcat", "-c"])
+
+    @staticmethod
+    async def check_crash(app_id: str) -> Optional[str]:
+        """Check logcat for FATAL EXCEPTION near app_id. Returns crash snippet or None."""
+        rc, out, _ = await _run([
+            config.ADB_BIN, "logcat", "-d",
+            "-s", "AndroidRuntime:E", "ActivityManager:E",
+        ])
+        if rc != 0 or not out.strip():
+            return None
+        # Look for FATAL EXCEPTION lines mentioning our app
+        lines = out.splitlines()
+        for i, line in enumerate(lines):
+            if "FATAL EXCEPTION" in line and app_id in out[out.index(line):]:
+                snippet = "\n".join(lines[i:i + 30])
+                return snippet[:1500]
+        return None
+
+    @staticmethod
     async def full_demo(workspace_path: str) -> DemoResult:
         ok, msg = await AndroidPlatform.ensure_device()
         if not ok:
@@ -466,15 +488,21 @@ class WebPlatform:
         if rc == 0:
             return BuildResult(success=True, output=raw)
 
-        # Fallback to jsBrowserDistribution
-        rc, out, err = await _run(
-            ["./gradlew", "composeApp:jsBrowserDistribution"],
-            cwd=workspace_path, timeout=300,
-        )
-        raw = out + err
-        if rc == 0:
-            return BuildResult(success=True, output=raw)
+        # Only try JS fallback if the WASM task itself doesn't exist
+        if "not found in project" in raw and "wasmJsBrowserDistribution" in raw:
+            rc2, out2, err2 = await _run(
+                ["./gradlew", "composeApp:jsBrowserDistribution"],
+                cwd=workspace_path, timeout=300,
+            )
+            raw2 = out2 + err2
+            if rc2 == 0:
+                return BuildResult(success=True, output=raw2)
+            # JS fallback also missing — return original WASM error
+            if "not found in project" in raw2:
+                return BuildResult(success=False, output=raw, error=extract_build_error(raw))
+            return BuildResult(success=False, output=raw2, error=extract_build_error(raw2))
 
+        # WASM task exists but build failed — return the real error
         return BuildResult(success=False, output=raw, error=extract_build_error(raw))
 
     @staticmethod
@@ -528,9 +556,21 @@ class WebPlatform:
         if not dist_dir:
             return None
 
+        # Custom server with COOP/COEP headers required for Kotlin/WASM SharedArrayBuffer
+        server_script = (
+            "import http.server,sys,os\n"
+            "os.chdir(sys.argv[2])\n"
+            "class H(http.server.SimpleHTTPRequestHandler):\n"
+            "  def end_headers(self):\n"
+            "    self.send_header('Cross-Origin-Opener-Policy','same-origin')\n"
+            "    self.send_header('Cross-Origin-Embedder-Policy','require-corp')\n"
+            "    super().end_headers()\n"
+            "  def log_message(self,*a):pass\n"
+            "http.server.HTTPServer(('',int(sys.argv[1])),H).serve_forever()\n"
+        )
         _web_server_proc = await asyncio.create_subprocess_exec(
-            "python3", "-m", "http.server", str(config.WEB_SERVE_PORT),
-            "--directory", str(dist_dir),
+            "python3", "-c", server_script,
+            str(config.WEB_SERVE_PORT), str(dist_dir),
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )
@@ -549,6 +589,24 @@ class WebPlatform:
             except asyncio.TimeoutError:
                 _web_server_proc.kill()
             _web_server_proc = None
+
+    @staticmethod
+    async def check_health(url: str) -> Optional[str]:
+        """HTTP GET the url; returns error string or None if healthy."""
+        import urllib.request
+        loop = asyncio.get_event_loop()
+        try:
+            def _fetch():
+                resp = urllib.request.urlopen(url, timeout=10)
+                body = resp.read()
+                if resp.status != 200:
+                    return f"HTTP {resp.status}"
+                if len(body) < 50:
+                    return "Response body too small (likely empty page)"
+                return None
+            return await loop.run_in_executor(None, _fetch)
+        except Exception as e:
+            return str(e)
 
     @staticmethod
     async def full_demo(workspace_path: str) -> DemoResult:
