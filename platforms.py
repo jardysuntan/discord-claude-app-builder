@@ -545,12 +545,24 @@ class WebPlatform:
         return None
 
     @staticmethod
+    async def _kill_port(port: int):
+        """Kill any process listening on the given port."""
+        rc, out, _ = await _run(["lsof", "-ti", f":{port}"])
+        if rc == 0 and out.strip():
+            for pid in out.strip().splitlines():
+                pid = pid.strip()
+                if pid.isdigit():
+                    await _run(["kill", "-9", pid])
+            await asyncio.sleep(0.5)
+
+    @staticmethod
     async def serve(workspace_path: str) -> Optional[str]:
         """Start a simple HTTP server for the built web app."""
         global _web_server_proc
 
-        # Stop existing server
+        # Stop existing server (ours + any orphan on the port)
         await WebPlatform.stop_server()
+        await WebPlatform._kill_port(config.WEB_SERVE_PORT)
 
         dist_dir = WebPlatform._find_dist_dir(workspace_path)
         if not dist_dir:
