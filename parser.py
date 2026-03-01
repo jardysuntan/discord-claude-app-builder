@@ -130,6 +130,14 @@ def parse(text: str) -> ParseResult:
             case "/runsh":
                 return Command(name="runsh", raw_cmd=rest or None)
 
+            # ── Save (game-save-style versioning) ─────────────────────
+            case "/save":
+                sub = rest.split()[0].lower() if rest else None
+                if sub in ("list", "undo", "redo", "github"):
+                    return Command(name="save", sub=sub)
+                # anything else is a custom save message: /save fixed the colors
+                return Command(name="save", sub=None, raw_cmd=rest or None)
+
             # ── Git & GitHub ─────────────────────────────────────────
             case "/status":
                 return Command(name="gitstatus")
