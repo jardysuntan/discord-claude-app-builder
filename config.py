@@ -69,7 +69,6 @@ SUPABASE_ANON_KEY: str = os.getenv("SUPABASE_ANON_KEY", "")
 # ── Queue & Budget ──────────────────────────────────────────────────────
 DAILY_TOKEN_CAP_USD: float = float(os.getenv("DAILY_TOKEN_CAP_USD", "50"))
 DEFAULT_USER_DAILY_CAP_USD: float = float(os.getenv("DEFAULT_USER_DAILY_CAP_USD", "10"))
-QUEUE_STOP_PCT: int = int(os.getenv("QUEUE_STOP_PCT", "90"))
 
 # ── Limits ───────────────────────────────────────────────────────────────────
 MAX_DISCORD_MSG_LEN: int = 1900

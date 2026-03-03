@@ -33,9 +33,8 @@ class CreateResult:
     success: bool = False
 
 
-def _unique_name(app_name: str) -> str:
+def _unique_name(app_name: str, base_dir: Path) -> str:
     """If app_name dir already exists, append 2, 3, … until unique."""
-    base_dir = Path(config.BASE_PROJECTS_DIR)
     if not (base_dir / app_name).exists():
         return app_name
     for i in range(2, 100):
@@ -45,12 +44,24 @@ def _unique_name(app_name: str) -> str:
     return f"{app_name}{int(time.time())}"
 
 
+def _project_base_dir(owner_id: int | None) -> Path:
+    """Return the base directory for a user's projects.
+    Admin (or None) → BASE_PROJECTS_DIR, others → BASE_PROJECTS_DIR/users/<id>/"""
+    base = Path(config.BASE_PROJECTS_DIR)
+    if owner_id is None or owner_id == config.DISCORD_ALLOWED_USER_ID:
+        return base
+    user_dir = base / "users" / str(owner_id)
+    user_dir.mkdir(parents=True, exist_ok=True)
+    return user_dir
+
+
 async def create_kmp_project(app_name: str, registry: WorkspaceRegistry, owner_id: int | None = None) -> CreateResult:
     """Scaffold a new KMP Compose Multiplatform project."""
-    app_name = _unique_name(app_name)
+    base_dir = _project_base_dir(owner_id)
+    app_name = _unique_name(app_name, base_dir)
     slug = slugify(app_name)
     new_pkg = f"{config.KMP_PACKAGE_PREFIX}.{slug}"
-    project_dir = Path(config.BASE_PROJECTS_DIR) / app_name
+    project_dir = base_dir / app_name
     template_dir = Path(config.TEMPLATES_DIR) / "kmp" / "KmpTemplate"
 
     if template_dir.exists():

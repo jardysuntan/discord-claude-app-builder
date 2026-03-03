@@ -962,52 +962,74 @@ async def send_workspace_footer(channel, user_id: int, selector_view=None):
             await channel.send("📂 No workspace set — pick one:", view=view)
 
 
-def help_text():
+def help_text(is_admin: bool = True):
     agent = " *(agent ON)*" if config.AGENT_MODE else " *(agent OFF)*"
-    return (
-        "**discord-claude-bridge** — build apps from chat" + agent + "\n\n"
-        "**Build Apps:**\n"
-        "`/build app <description>` — idea → running app\n"
-        "`/build android|ios|web` — build one platform\n"
-        "`/demo android|ios|web` — build + screenshot\n"
-        "`/fix [instructions]` — auto-fix build errors\n"
-        "`/testflight` — upload to TestFlight\n"
-        "`/deploy ios|android` — install on device\n"
-        "`/vid` — record Android emulator\n"
-        "`/widget <desc>` — add iOS widget\n\n"
-        "**Workspaces:**\n"
-        "`@<ws> <prompt>` — talk to Claude in a workspace\n"
-        "`/use <ws>` · `/ls` — switch / list workspaces\n"
-        "`/create <Name>` — scaffold new project\n"
-        "`/remove <ws>` · `/rename <old> <new>`\n\n"
-        "**Save:**\n"
-        "`/save` — save your progress (all platforms)\n"
-        "`/save list` — see your save history\n"
-        "`/save undo` · `/save redo`\n"
-        "`/save github` — upload to GitHub\n\n"
-        "**Git:**\n"
-        "`/status` · `/diff` · `/commit [msg]` · `/log`\n"
-        "`/branch [name]` · `/stash` · `/pr [title]`\n"
-        "`/undo` · `/repo`\n\n"
-        "**Tools:**\n"
-        "`/run <cmd>` — run shell command in workspace\n"
-        "`/queue task1 --- task2` — batch tasks\n"
-        "`/spend` — daily budget\n"
-        "`/dashboard` — web launcher for all apps\n"
-        "`/bot-todo` — track improvements\n"
-        "`/memory show|pin|reset` — project memory\n"
-        "`/fixes show|clear` — build fix log\n\n"
-        "**System:**\n"
-        "`/setup` · `/health` · `/reload` · `/newsession`\n\n"
-        "**Admin Only:**\n"
-        "`/allow @user` — grant bot access\n"
-        "`/disallow @user` — revoke access\n"
-        "`/setcap @user <amount>` — set daily spend cap\n"
-        "`/users` — list allowed users + spend\n"
-        "`/demo ios|android` · `/vid` · `/mirror` — hardware access\n"
-        "`/maintenance [msg|off]` — toggle maintenance\n"
-        "`/announce <msg>` — post to announcement channel"
-    )
+    lines = [
+        "**discord-claude-bridge** — build apps from chat" + agent + "\n",
+        "**Build Apps:**",
+        "`/build app <description>` — idea → running app",
+        "`/build web` — build web target",
+        "`/demo web` — build + preview",
+        "`/fix [instructions]` — auto-fix build errors",
+        "`/testflight` — upload to TestFlight",
+    ]
+    if is_admin:
+        lines += [
+            "`/build android|ios` — build native target",
+            "`/demo android|ios` — native build + screenshot",
+            "`/deploy ios|android` — install on device",
+            "`/vid` — record Android emulator",
+            "`/widget <desc>` — add iOS widget",
+        ]
+    lines += [
+        "",
+        "**Workspaces:**",
+        "`@<ws> <prompt>` — talk to Claude in a workspace",
+        "`/use <ws>` · `/ls` — switch / list workspaces",
+        "`/create <Name>` — scaffold new project",
+        "`/remove <ws>` · `/rename <old> <new>`",
+        "",
+        "**Save:**",
+        "`/save` — save your progress",
+        "`/save list` — see your save history",
+        "`/save undo` · `/save redo`",
+        "`/save github` — upload to GitHub",
+        "",
+        "**Git:**",
+        "`/status` · `/diff` · `/commit [msg]` · `/log`",
+        "`/branch [name]` · `/stash` · `/pr [title]`",
+        "`/undo` · `/repo`",
+        "",
+        "**Tools:**",
+        "`/queue task1 --- task2` — batch tasks",
+        "`/spend` — daily budget",
+    ]
+    if is_admin:
+        lines += [
+            "`/run <cmd>` — run shell command in workspace",
+            "`/dashboard` — web launcher for all apps",
+            "`/bot-todo` — track improvements",
+        ]
+    lines += [
+        "`/memory show|pin|reset` — project memory",
+        "`/fixes show|clear` — build fix log",
+        "",
+        "**System:**",
+        "`/health` · `/newsession`",
+    ]
+    if is_admin:
+        lines += [
+            "`/setup` · `/reload`",
+            "",
+            "**Admin:**",
+            "`/allow @user` — grant bot access",
+            "`/disallow @user` — revoke access",
+            "`/setcap @user <amount>` — set daily spend cap",
+            "`/users` — list allowed users + spend",
+            "`/maintenance [msg|off]` — toggle maintenance",
+            "`/announce <msg>` — post to announcement channel",
+        ]
+    return "\n".join(lines)
 
 
 # ── Events ───────────────────────────────────────────────────────────────────
@@ -1251,7 +1273,7 @@ async def on_message(message: discord.Message):
 
     match cmd.name:
         case "help":
-            await send(channel, help_text())
+            await send(channel, help_text(is_admin))
 
         case "ls":
             keys = registry.list_keys(owner_id=None if is_admin else user_id)
