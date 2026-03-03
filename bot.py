@@ -5,6 +5,7 @@ Entry point. Discord client, message routing, response dispatch.
 
 import asyncio
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -22,6 +23,7 @@ from commands.bot_todo import handle_bot_todo
 from commands.dashboard import handle_dashboard
 from commands.testflight import handle_testflight, TestFlightResult
 from cost_tracker import CostTracker
+from allowlist import Allowlist
 from commands.create import create_kmp_project
 from agent_loop import run_agent_loop, format_loop_summary
 from platforms import demo_platform, build_platform, deploy_ios, deploy_android, AndroidPlatform, iOSPlatform, WebPlatform
@@ -47,6 +49,7 @@ config.print_config_summary()
 registry = WorkspaceRegistry()
 claude = ClaudeRunner()
 cost_tracker = CostTracker()
+allowlist = Allowlist()
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -937,7 +940,7 @@ class QueueBuilderView(discord.ui.View):
 
         await queue.handle_queue(
             raw, self.ws_key, self.ws_path, claude, cost_tracker,
-            on_status=queue_status,
+            on_status=queue_status, user_id=self.owner_id,
         )
 
     async def on_timeout(self):
@@ -996,10 +999,13 @@ def help_text():
         "`/fixes show|clear` — build fix log\n\n"
         "**System:**\n"
         "`/setup` · `/health` · `/reload` · `/newsession`\n\n"
-        "**Owner Only:**\n"
-        "`/maintenance` — block public commands while updating\n"
-        "`/maintenance <msg>` — custom maintenance message\n"
-        "`/maintenance off` — resume public access\n"
+        "**Admin Only:**\n"
+        "`/allow @user` — grant bot access\n"
+        "`/disallow @user` — revoke access\n"
+        "`/setcap @user <amount>` — set daily spend cap\n"
+        "`/users` — list allowed users + spend\n"
+        "`/demo ios|android` · `/vid` · `/mirror` — hardware access\n"
+        "`/maintenance [msg|off]` — toggle maintenance\n"
         "`/announce <msg>` — post to announcement channel"
     )
 
@@ -1044,11 +1050,13 @@ async def on_message(message: discord.Message):
     parsed = msg_parser.parse(text)
     channel = message.channel
     is_dm = isinstance(channel, discord.DMChannel)
-    is_owner = message.author.id == config.DISCORD_ALLOWED_USER_ID
+    user_id = message.author.id
+    is_admin = allowlist.is_admin(user_id)
+    is_allowed = allowlist.is_allowed(user_id)
 
     # ── Public commands (server + DM, any user) ──────────────────────────
     if isinstance(parsed, Command) and parsed.name in ("showcase", "tryapp", "gallery", "done"):
-        if maintenance_mode and not is_owner:
+        if maintenance_mode and not is_admin:
             return await send(channel, maintenance_message)
         if not config.AGENT_MODE:
             return await send(channel, "🔒 Agent mode is OFF.")
@@ -1084,30 +1092,38 @@ async def on_message(message: discord.Message):
                 await send(channel, result)
         return
 
-    # ── Everything below: DM-only, owner-only ────────────────────────────
-    if not is_dm or not is_owner:
+    # ── Everything below: DM-only, allowed users ────────────────────────
+    if not is_dm or not is_allowed:
         return
 
     # ── Claude prompts ───────────────────────────────────────────────────
     if isinstance(parsed, (WorkspacePrompt, FallbackPrompt)):
         # If a data-interview is pending for this user, let the interview
         # collector grab the reply instead of routing it to Claude.
-        if isinstance(parsed, FallbackPrompt) and (channel.id, message.author.id) in _interview_pending:
+        if isinstance(parsed, FallbackPrompt) and (channel.id, user_id) in _interview_pending:
             return
 
         if isinstance(parsed, WorkspacePrompt):
-            ws_key, ws_path = registry.resolve(parsed.workspace, message.author.id)
+            ws_key, ws_path = registry.resolve(parsed.workspace, user_id)
             prompt = parsed.prompt
         else:
-            ws_key, ws_path = registry.resolve(None, message.author.id)
+            ws_key, ws_path = registry.resolve(None, user_id)
             prompt = parsed.prompt
 
         if not ws_key:
             return await send(channel, "❌ No workspace set. Use `/use <ws>` or `@ws`.")
         if not ws_path:
             return await send(channel, f"❌ Workspace `{ws_key}` not found.")
+        if not registry.can_access(ws_key, user_id, is_admin):
+            return await send(channel, "You don't have access to that workspace.")
 
-        cancel_view = CancelRequestView(message.author.id, ws_key)
+        # Cost gating
+        user_cap = allowlist.get_daily_cap(user_id)
+        if not cost_tracker.can_afford(user_cap, user_id):
+            return await send(channel,
+                f"⛔ Daily budget reached (${cost_tracker.today_spent(user_id):.2f} / ${user_cap:.2f}). Try again tomorrow.")
+
+        cancel_view = CancelRequestView(user_id, ws_key)
         cancel_msg = await channel.send(
             f"🧠 Thinking in **{ws_key}**…", view=cancel_view,
         )
@@ -1134,7 +1150,7 @@ async def on_message(message: discord.Message):
         if cancel_view.cancelled:
             return await send(channel, "🛑 Request was cancelled.")
 
-        cost_tracker.add(result.total_cost_usd)
+        cost_tracker.add(result.total_cost_usd, user_id)
         if result.exit_code != 0:
             error_detail = result.stderr.strip() or result.stdout.strip() or ""
             # Auto-reset session on context compaction crash so next message works
@@ -1148,7 +1164,7 @@ async def on_message(message: discord.Message):
                 claude.clear_session(ws_key)
                 await send(channel, "⚠️ Claude failed, retrying...")
                 result = await claude.run(prompt, ws_key, ws_path, on_progress=claude_progress)
-                cost_tracker.add(result.total_cost_usd)
+                cost_tracker.add(result.total_cost_usd, user_id)
                 if result.exit_code != 0:
                     error_detail = result.stderr.strip() or result.stdout.strip() or "Unknown error"
                     return await send(channel, f"⚠️ Claude failed:\n```\n{error_detail[:1500]}\n```")
@@ -1200,8 +1216,9 @@ async def on_message(message: discord.Message):
                         await send(channel, f"✅ Web fixed → {url}")
 
             # Auto-preview: build + screenshot for user's preferred platform
-            user_platform = registry.get_platform(message.author.id)
-            if user_platform in ("ios", "android"):
+            # Non-admin: web preview URL only (no simulator/emulator access)
+            user_platform = registry.get_platform(user_id)
+            if is_admin and user_platform in ("ios", "android"):
                 await send(channel, f"📸 Auto-previewing on {user_platform}…")
                 preview_build = await build_platform(user_platform, ws_path)
                 if preview_build.success:
@@ -1222,7 +1239,7 @@ async def on_message(message: discord.Message):
                 else:
                     await send(channel, f"⚠️ {user_platform.upper()} build failed — use `/demo` to auto-fix.")
 
-        await send_workspace_footer(channel, message.author.id)
+        await send_workspace_footer(channel, user_id)
         return
 
     # ── Commands ─────────────────────────────────────────────────────────
@@ -1237,9 +1254,9 @@ async def on_message(message: discord.Message):
             await send(channel, help_text())
 
         case "ls":
-            keys = registry.list_keys()
+            keys = registry.list_keys(owner_id=None if is_admin else user_id)
             if keys:
-                view = WorkspaceSelectorView(message.author.id, keys)
+                view = WorkspaceSelectorView(user_id, keys)
                 await channel.send("**Workspaces:**", view=view)
                 _active_selector_view = view
             else:
@@ -1248,14 +1265,18 @@ async def on_message(message: discord.Message):
         case "use":
             if not cmd.workspace:
                 await send(channel, "Usage: `/use <workspace>`")
-            elif registry.set_default(message.author.id, cmd.workspace):
+            elif not registry.exists(cmd.workspace):
+                await send(channel, f"❌ Unknown: `{cmd.workspace}`")
+            elif not registry.can_access(cmd.workspace, user_id, is_admin):
+                await send(channel, "You don't have access to that workspace.")
+            elif registry.set_default(user_id, cmd.workspace):
                 await send(channel, f"✅ Default → **{cmd.workspace}**")
             else:
-                await send(channel, f"❌ Unknown: `{cmd.workspace}`")
+                await send(channel, f"❌ Could not set default.")
 
         case "where":
             # Redundant with workspace footer, but keep for backwards compat
-            ws = registry.get_default(message.author.id)
+            ws = registry.get_default(user_id)
             if ws:
                 await send(channel, f"📂 **{ws}** → `{registry.get_path(ws)}`")
             else:
@@ -1267,7 +1288,7 @@ async def on_message(message: discord.Message):
             elif not cmd.app_name:
                 await send(channel, "Usage: `/create <AppName>`")
             else:
-                result = await create_kmp_project(cmd.app_name, registry)
+                result = await create_kmp_project(cmd.app_name, registry, owner_id=user_id)
                 await send(channel, result.message)
 
         case "deleteapp":
@@ -1280,8 +1301,10 @@ async def on_message(message: discord.Message):
                 ws_path = registry.get_path(ws_key)
                 if not ws_path:
                     await send(channel, f"❌ Unknown workspace: `{ws_key}`")
+                elif not registry.can_access(ws_key, user_id, is_admin):
+                    await send(channel, "You don't have access to that workspace.")
                 else:
-                    view = ConfirmDeleteView(ws_key, ws_path, message.author.id)
+                    view = ConfirmDeleteView(ws_key, ws_path, user_id)
                     await channel.send(
                         f"Delete **{ws_key}** (`{ws_path}`)?\nThis removes all files permanently.",
                         view=view,
@@ -1295,6 +1318,8 @@ async def on_message(message: discord.Message):
                 new_key = cmd.arg.lower()
                 if not registry.get_path(old_key):
                     await send(channel, f"❌ Workspace `{old_key}` not found.")
+                elif not registry.can_access(old_key, user_id, is_admin):
+                    await send(channel, "You don't have access to that workspace.")
                 elif registry.get_path(new_key):
                     await send(channel, f"❌ `{new_key}` already exists.")
                 elif registry.rename(old_key, new_key):
@@ -1313,13 +1338,13 @@ async def on_message(message: discord.Message):
                     """Ask the user a question during buildapp; return their reply or None on skip/timeout."""
                     view = SkipDataInterviewView()
                     q_msg = await channel.send(question, view=view)
-                    pair = (channel.id, message.author.id)
+                    pair = (channel.id, user_id)
                     _interview_pending.add(pair)
 
                     def check(m: discord.Message) -> bool:
                         return (
                             m.channel.id == channel.id
-                            and m.author.id == message.author.id
+                            and m.author.id == user_id
                             and not m.content.startswith("/")
                             and not m.content.startswith("@")
                         )
@@ -1350,17 +1375,18 @@ async def on_message(message: discord.Message):
                         _interview_pending.discard(pair)
 
                 slug = await buildapp.handle_buildapp(
-                    cmd.raw_cmd or "", registry, claude, ba_status, on_ask=ba_ask
+                    cmd.raw_cmd or "", registry, claude, ba_status,
+                    on_ask=ba_ask, is_admin=is_admin, owner_id=user_id,
                 )
                 if slug:
-                    registry.set_default(message.author.id, slug)
+                    registry.set_default(user_id, slug)
                     await send(channel, f"📂 Switched to **{slug}**")
 
         case "build":
             if not config.AGENT_MODE:
                 await send(channel, "🔒 Agent mode OFF.")
             else:
-                ws_key, ws_path = registry.resolve(None, message.author.id)
+                ws_key, ws_path = registry.resolve(None, user_id)
                 if not ws_path:
                     await send(channel, "❌ No workspace set.")
                 else:
@@ -1374,43 +1400,54 @@ async def on_message(message: discord.Message):
                         await send(channel, f"❌ {platform.upper()} build failed:\n```\n{result.error[:1200]}\n```")
 
         case "platform":
-            if cmd.platform and cmd.platform in ("ios", "android", "web"):
-                registry.set_platform(message.author.id, cmd.platform)
+            if cmd.platform and cmd.platform in ("ios", "android") and not is_admin:
+                await send(channel, f"🔒 `/platform {cmd.platform}` is admin-only. Use `/platform web`.")
+            elif cmd.platform and cmd.platform in ("ios", "android", "web"):
+                registry.set_platform(user_id, cmd.platform)
                 await send(channel, f"✅ Default demo platform set to **{cmd.platform}**.")
                 if cmd.platform == "ios":
                     await channel.send(embed=_ios_deploy_info_embed())
             elif cmd.platform:
                 await send(channel, "❌ Unknown platform. Use `/platform ios`, `android`, or `web`.")
             else:
-                current = registry.get_platform(message.author.id)
+                current = registry.get_platform(user_id)
                 await send(channel, f"📱 Your demo platform: **{current or 'web (default)'}**\nChange with `/platform ios`, `android`, or `web`.")
 
         case "demo":
             if not config.AGENT_MODE:
                 await send(channel, "🔒 Agent mode OFF.")
             else:
-                ws_key, ws_path = registry.resolve(None, message.author.id)
+                ws_key, ws_path = registry.resolve(None, user_id)
                 if not ws_path:
                     await send(channel, "❌ No workspace set.")
+                elif not registry.can_access(ws_key, user_id, is_admin):
+                    await send(channel, "You don't have access to that workspace.")
+                elif cmd.platform and cmd.platform in ("ios", "android") and not is_admin:
+                    await send(channel, f"🔒 `/demo {cmd.platform}` is admin-only. Use `/demo web` or `/testflight`.")
                 elif cmd.platform:
                     # /demo android, /demo ios, /demo web → run directly
-                    prev = registry.get_platform(message.author.id)
+                    prev = registry.get_platform(user_id)
                     if prev != cmd.platform:
-                        registry.set_platform(message.author.id, cmd.platform)
+                        registry.set_platform(user_id, cmd.platform)
                         await send(channel, f"📌 **{cmd.platform.upper()}** is now your preferred demo platform.")
                         if cmd.platform == "ios":
                             await channel.send(embed=_ios_deploy_info_embed())
                     await _run_demo(channel, ws_key, ws_path, cmd.platform)
                 else:
                     # /demo → auto-pick from preference, default to web
-                    platform = registry.get_platform(message.author.id) or "web"
+                    platform = registry.get_platform(user_id) or "web"
+                    # Non-admin can only demo web
+                    if platform in ("ios", "android") and not is_admin:
+                        platform = "web"
                     await _run_demo(channel, ws_key, ws_path, platform)
 
         case "deploy":
             if not config.AGENT_MODE:
                 await send(channel, "🔒 Agent mode OFF.")
+            elif not is_admin:
+                await send(channel, "🔒 `/deploy` is admin-only. Use `/testflight` instead.")
             else:
-                ws_key, ws_path = registry.resolve(None, message.author.id)
+                ws_key, ws_path = registry.resolve(None, user_id)
                 if not ws_path:
                     await send(channel, "❌ No workspace set.")
                 else:
@@ -1429,7 +1466,7 @@ async def on_message(message: discord.Message):
             if not config.AGENT_MODE:
                 await send(channel, "🔒 Agent mode OFF.")
             else:
-                ws_key, ws_path = registry.resolve(None, message.author.id)
+                ws_key, ws_path = registry.resolve(None, user_id)
                 if not ws_path:
                     await send(channel, "❌ No workspace set.")
                 else:
@@ -1438,7 +1475,7 @@ async def on_message(message: discord.Message):
                     result = await handle_testflight(ws_key, ws_path, on_status=tf_status)
                     if result and result.needs_setup:
                         embed, view = _testflight_setup_embed(
-                            message.author.id, ws_key, ws_path,
+                            user_id, ws_key, ws_path,
                             result.app_name, result.bundle_id,
                         )
                         await channel.send(embed=embed, view=view)
@@ -1450,8 +1487,10 @@ async def on_message(message: discord.Message):
         case "vid":
             if not config.AGENT_MODE:
                 await send(channel, "🔒 Agent mode OFF.")
+            elif not is_admin:
+                await send(channel, "🔒 `/vid` is admin-only.")
             else:
-                ws_key, ws_path = registry.resolve(None, message.author.id)
+                ws_key, ws_path = registry.resolve(None, user_id)
                 if not ws_path:
                     await send(channel, "❌ No workspace set.")
                 else:
@@ -1472,7 +1511,7 @@ async def on_message(message: discord.Message):
             if not config.AGENT_MODE:
                 await send(channel, "🔒 Agent mode OFF.")
             else:
-                ws_key, ws_path = registry.resolve(None, message.author.id)
+                ws_key, ws_path = registry.resolve(None, user_id)
                 if not ws_path:
                     await send(channel, "❌ No workspace set.")
                 else:
@@ -1485,8 +1524,10 @@ async def on_message(message: discord.Message):
         case "widget":
             if not config.AGENT_MODE:
                 await send(channel, "🔒 Agent mode OFF.")
+            elif not is_admin:
+                await send(channel, "🔒 `/widget` is admin-only (iOS feature).")
             else:
-                ws_key, ws_path = registry.resolve(None, message.author.id)
+                ws_key, ws_path = registry.resolve(None, user_id)
                 if not ws_path:
                     await send(channel, "❌ No workspace set.")
                 else:
@@ -1499,12 +1540,12 @@ async def on_message(message: discord.Message):
             if not config.AGENT_MODE:
                 await send(channel, "🔒 Agent mode OFF.")
             else:
-                ws_key, ws_path = registry.resolve(None, message.author.id)
+                ws_key, ws_path = registry.resolve(None, user_id)
                 if not ws_path:
                     await send(channel, "❌ No workspace set.")
                 elif not cmd.raw_cmd:
                     # Interactive wizard
-                    view = QueueBuilderView(message.author.id, channel, ws_key, ws_path)
+                    view = QueueBuilderView(user_id, channel, ws_key, ws_path)
                     await channel.send(view.build_message(), view=view)
                 else:
                     # Inline syntax: /queue task1 --- task2
@@ -1512,27 +1553,145 @@ async def on_message(message: discord.Message):
                         await send(channel, msg, file_path=fpath)
                     await queue.handle_queue(
                         cmd.raw_cmd, ws_key, ws_path, claude, cost_tracker,
-                        on_status=queue_status,
+                        on_status=queue_status, user_id=user_id,
                     )
 
         case "spend":
-            spent = cost_tracker.today_spent()
-            cap = config.DAILY_TOKEN_CAP_USD
-            tasks = cost_tracker.today_tasks()
-            remaining = max(0, cap * (config.QUEUE_STOP_PCT / 100.0) - spent)
-            await send(channel, (
-                f"💰 **Daily Spend**\n"
-                f"  Today: ${spent:.4f}\n"
-                f"  Budget: ${cap:.2f} ({config.QUEUE_STOP_PCT}% cap)\n"
-                f"  Remaining: ${remaining:.2f}\n"
-                f"  Tasks: {tasks}"
-            ))
+            user_cap = allowlist.get_daily_cap(user_id)
+            my_spent = cost_tracker.today_spent(user_id)
+            my_tasks = cost_tracker.today_tasks(user_id)
+            my_remaining = max(0, user_cap - my_spent)
+            lines = [
+                f"💰 **Your Daily Spend**",
+                f"  Today: ${my_spent:.4f}",
+                f"  Budget: ${user_cap:.2f}",
+                f"  Remaining: ${my_remaining:.2f}",
+                f"  Tasks: {my_tasks}",
+            ]
+            if is_admin:
+                global_spent = cost_tracker.today_spent()
+                global_tasks = cost_tracker.today_tasks()
+                lines.append(f"\n📊 **Global**")
+                lines.append(f"  Total: ${global_spent:.4f} ({global_tasks} tasks)")
+                for uid, spent, tasks in cost_tracker.user_summaries():
+                    name = allowlist.get_display_name(uid) or str(uid)
+                    lines.append(f"  {name}: ${spent:.4f} ({tasks} tasks)")
+            await send(channel, "\n".join(lines))
+
+        case "allow":
+            if not is_admin:
+                await send(channel, "🔒 Admin-only command.")
+                await send_workspace_footer(channel, user_id)
+                return
+            if not cmd.raw_cmd:
+                await send(channel, "Usage: `/allow @user`")
+            else:
+                # Extract user ID from mention or raw ID
+                m = re.match(r"<@!?(\d+)>", cmd.raw_cmd.strip())
+                target_id = int(m.group(1)) if m else None
+                if not target_id and cmd.raw_cmd.strip().isdigit():
+                    target_id = int(cmd.raw_cmd.strip())
+                if not target_id:
+                    await send(channel, "Usage: `/allow @user`")
+                elif allowlist.is_allowed(target_id):
+                    name = allowlist.get_display_name(target_id) or str(target_id)
+                    await send(channel, f"**{name}** is already allowed.")
+                else:
+                    try:
+                        target_user = await client.fetch_user(target_id)
+                        display = target_user.display_name
+                    except Exception:
+                        display = str(target_id)
+                    allowlist.add(target_id, display)
+                    await send(channel, f"✅ **{display}** added to allowlist (cap: ${config.DEFAULT_USER_DAILY_CAP_USD:.2f}/day).")
+                    # DM the user
+                    try:
+                        if target_user:
+                            await target_user.send(
+                                "You've been granted access to the app builder bot! "
+                                "Send `/help` to get started."
+                            )
+                    except Exception:
+                        pass
+
+        case "disallow":
+            if not is_admin:
+                await send(channel, "🔒 Admin-only command.")
+                await send_workspace_footer(channel, user_id)
+                return
+            if not cmd.raw_cmd:
+                await send(channel, "Usage: `/disallow @user`")
+            else:
+                m = re.match(r"<@!?(\d+)>", cmd.raw_cmd.strip())
+                target_id = int(m.group(1)) if m else None
+                if not target_id and cmd.raw_cmd.strip().isdigit():
+                    target_id = int(cmd.raw_cmd.strip())
+                if not target_id:
+                    await send(channel, "Usage: `/disallow @user`")
+                elif not allowlist.remove(target_id):
+                    await send(channel, "Cannot remove the bootstrap admin.")
+                else:
+                    await send(channel, f"✅ User `{target_id}` removed from allowlist.")
+
+        case "setcap":
+            if not is_admin:
+                await send(channel, "🔒 Admin-only command.")
+                await send_workspace_footer(channel, user_id)
+                return
+            if not cmd.raw_cmd:
+                await send(channel, "Usage: `/setcap @user <amount>`")
+            else:
+                parts = cmd.raw_cmd.strip().split()
+                m = re.match(r"<@!?(\d+)>", parts[0]) if parts else None
+                target_id = int(m.group(1)) if m else None
+                if not target_id and parts and parts[0].isdigit():
+                    target_id = int(parts[0])
+                amount_str = parts[1] if len(parts) > 1 else None
+                if not target_id or not amount_str:
+                    await send(channel, "Usage: `/setcap @user <amount>`")
+                else:
+                    try:
+                        amount = float(amount_str)
+                    except ValueError:
+                        await send(channel, "Invalid amount. Use a number like `15.00`.")
+                        await send_workspace_footer(channel, user_id)
+                        return
+                    if allowlist.set_daily_cap(target_id, amount):
+                        name = allowlist.get_display_name(target_id) or str(target_id)
+                        await send(channel, f"✅ **{name}** daily cap set to ${amount:.2f}.")
+                    else:
+                        await send(channel, f"User `{target_id}` is not in the allowlist.")
+
+        case "users":
+            if not is_admin:
+                await send(channel, "🔒 Admin-only command.")
+                await send_workspace_footer(channel, user_id)
+                return
+            users = allowlist.list_users()
+            if not users:
+                await send(channel, "No users in allowlist.")
+            else:
+                lines = ["**Allowed Users**"]
+                for uid, info in users:
+                    role = info.get("role", "user")
+                    name = info.get("display_name", str(uid))
+                    cap = info.get("daily_cap_usd", config.DEFAULT_USER_DAILY_CAP_USD)
+                    spent = cost_tracker.today_spent(uid)
+                    tasks = cost_tracker.today_tasks(uid)
+                    badge = "👑" if role == "admin" else "👤"
+                    lines.append(
+                        f"{badge} **{name}** (`{uid}`) — "
+                        f"${spent:.2f}/${cap:.2f} today, {tasks} tasks"
+                    )
+                await send(channel, "\n".join(lines))
 
         case "run":
             if not config.AGENT_MODE:
                 await send(channel, "🔒 Agent mode OFF.")
+            elif not is_admin:
+                await send(channel, "🔒 `/run` is admin-only.")
             else:
-                ws_key, ws_path = registry.resolve(None, message.author.id)
+                ws_key, ws_path = registry.resolve(None, user_id)
                 if not ws_path:
                     await send(channel, "❌ No workspace set.")
                 else:
@@ -1541,8 +1700,10 @@ async def on_message(message: discord.Message):
         case "runsh":
             if not config.AGENT_MODE:
                 await send(channel, "🔒 Agent mode OFF.")
+            elif not is_admin:
+                await send(channel, "🔒 `/runsh` is admin-only.")
             else:
-                ws_key, ws_path = registry.resolve(None, message.author.id)
+                ws_key, ws_path = registry.resolve(None, user_id)
                 if not ws_path:
                     await send(channel, "❌ No workspace set.")
                 else:
@@ -1550,7 +1711,7 @@ async def on_message(message: discord.Message):
 
         # ── Save (game-save-style versioning) ─────────────────────
         case "save":
-            ws_key, ws_path = registry.resolve(None, message.author.id)
+            ws_key, ws_path = registry.resolve(None, user_id)
             if not ws_path:
                 await send(channel, "❌ No workspace set.")
             else:
@@ -1558,7 +1719,7 @@ async def on_message(message: discord.Message):
                     case "list":
                         text, saves = await git_cmd.handle_save_list(ws_path)
                         if saves and len(saves) > 1:
-                            view = SaveListView(message.author.id, ws_path, saves)
+                            view = SaveListView(user_id, ws_path, saves)
                             view.message = await channel.send(text, view=view)
                         else:
                             await send(channel, text)
@@ -1580,7 +1741,7 @@ async def on_message(message: discord.Message):
                                 await send(channel, result)
                             else:
                                 num, description = result
-                                view = SaveConfirmView(ws_path, message.author.id, num, description)
+                                view = SaveConfirmView(ws_path, user_id, num, description)
                                 preview = (
                                     f"💾 **Save {num}** — {description}\n"
                                     f"-# Click Save to confirm, or edit the description first."
@@ -1589,14 +1750,14 @@ async def on_message(message: discord.Message):
 
         # ── Git & GitHub ─────────────────────────────────────────
         case "gitstatus":
-            ws_key, ws_path = registry.resolve(None, message.author.id)
+            ws_key, ws_path = registry.resolve(None, user_id)
             if not ws_path:
                 await send(channel, "❌ No workspace set.")
             else:
                 await send(channel, await git_cmd.handle_status(ws_path, ws_key))
 
         case "diff":
-            ws_key, ws_path = registry.resolve(None, message.author.id)
+            ws_key, ws_path = registry.resolve(None, user_id)
             if not ws_path:
                 await send(channel, "❌ No workspace set.")
             else:
@@ -1604,7 +1765,7 @@ async def on_message(message: discord.Message):
                 await send(channel, await git_cmd.handle_diff(ws_path, full))
 
         case "commit":
-            ws_key, ws_path = registry.resolve(None, message.author.id)
+            ws_key, ws_path = registry.resolve(None, user_id)
             if not ws_path:
                 await send(channel, "❌ No workspace set.")
             else:
@@ -1613,14 +1774,14 @@ async def on_message(message: discord.Message):
                 await send(channel, result)
 
         case "undo":
-            ws_key, ws_path = registry.resolve(None, message.author.id)
+            ws_key, ws_path = registry.resolve(None, user_id)
             if not ws_path:
                 await send(channel, "❌ No workspace set.")
             else:
                 await send(channel, await git_cmd.handle_undo(ws_path))
 
         case "gitlog":
-            ws_key, ws_path = registry.resolve(None, message.author.id)
+            ws_key, ws_path = registry.resolve(None, user_id)
             if not ws_path:
                 await send(channel, "❌ No workspace set.")
             else:
@@ -1628,21 +1789,21 @@ async def on_message(message: discord.Message):
                 await send(channel, await git_cmd.handle_log(ws_path, count))
 
         case "branch":
-            ws_key, ws_path = registry.resolve(None, message.author.id)
+            ws_key, ws_path = registry.resolve(None, user_id)
             if not ws_path:
                 await send(channel, "❌ No workspace set.")
             else:
                 await send(channel, await git_cmd.handle_branch(ws_path, cmd.raw_cmd))
 
         case "stash":
-            ws_key, ws_path = registry.resolve(None, message.author.id)
+            ws_key, ws_path = registry.resolve(None, user_id)
             if not ws_path:
                 await send(channel, "❌ No workspace set.")
             else:
                 await send(channel, await git_cmd.handle_stash(ws_path, pop=(cmd.sub == "pop")))
 
         case "pr":
-            ws_key, ws_path = registry.resolve(None, message.author.id)
+            ws_key, ws_path = registry.resolve(None, user_id)
             if not ws_path:
                 await send(channel, "❌ No workspace set.")
             else:
@@ -1650,7 +1811,7 @@ async def on_message(message: discord.Message):
                     ws_path, ws_key, title=cmd.raw_cmd, claude=claude))
 
         case "repo":
-            ws_key, ws_path = registry.resolve(None, message.author.id)
+            ws_key, ws_path = registry.resolve(None, user_id)
             if not ws_path:
                 await send(channel, "❌ No workspace set.")
             else:
@@ -1660,12 +1821,14 @@ async def on_message(message: discord.Message):
         case "mirror":
             if not config.AGENT_MODE:
                 await send(channel, "🔒 Agent mode OFF.")
+            elif not is_admin:
+                await send(channel, "🔒 `/mirror` is admin-only.")
             else:
                 from commands.scrcpy import handle_mirror
                 await send(channel, await handle_mirror(cmd.sub or "start"))
 
         case "memory":
-            ws_key, ws_path = registry.resolve(None, message.author.id)
+            ws_key, ws_path = registry.resolve(None, user_id)
             if not ws_path:
                 await send(channel, "❌ No workspace set.")
             else:
@@ -1673,7 +1836,7 @@ async def on_message(message: discord.Message):
                     cmd.sub, cmd.arg, ws_path, ws_key))
 
         case "fixes":
-            ws_key, ws_path = registry.resolve(None, message.author.id)
+            ws_key, ws_path = registry.resolve(None, user_id)
             if not ws_path:
                 await send(channel, "❌ No workspace set.")
             else:
@@ -1681,6 +1844,10 @@ async def on_message(message: discord.Message):
                     cmd.sub, ws_path, ws_key))
 
         case "setup":
+            if not is_admin:
+                await send(channel, "🔒 Admin-only command.")
+                await send_workspace_footer(channel, user_id)
+                return
             import shutil
             checks = []
 
@@ -1731,7 +1898,7 @@ async def on_message(message: discord.Message):
             uptime = int(time.time() - START_TIME)
             m, s = divmod(uptime, 60)
             h, m = divmod(m, 60)
-            ws = registry.get_default(message.author.id) or "(none)"
+            ws = registry.get_default(user_id) or "(none)"
             sess = claude.get_session(ws) or "(none)"
             await send(channel, (
                 f"**Health**\n"
@@ -1744,6 +1911,10 @@ async def on_message(message: discord.Message):
             ))
 
         case "reload":
+            if not is_admin:
+                await send(channel, "🔒 Admin-only command.")
+                await send_workspace_footer(channel, user_id)
+                return
             await send(channel, "♻️ Restarting via pm2…")
             os.system("pm2 restart discord-claude-bridge")
 
@@ -1764,7 +1935,7 @@ async def on_message(message: discord.Message):
                 )
 
         case "newsession":
-            ws_key = registry.get_default(message.author.id)
+            ws_key = registry.get_default(user_id)
             if ws_key:
                 claude.clear_session(ws_key)
                 await send(channel, f"🔄 Fresh session for **{ws_key}**.")
@@ -1772,6 +1943,10 @@ async def on_message(message: discord.Message):
                 await send(channel, "❌ No workspace set.")
 
         case "maintenance":
+            if not is_admin:
+                await send(channel, "🔒 Admin-only command.")
+                await send_workspace_footer(channel, user_id)
+                return
             if cmd.raw_cmd and cmd.raw_cmd.lower() == "off":
                 maintenance_mode = False
                 await send(channel, "✅ Maintenance mode **OFF** — public commands are live.")
@@ -1784,6 +1959,10 @@ async def on_message(message: discord.Message):
                 await send(channel, f"🔧 Maintenance mode **ON**\nPublic users see: *{maintenance_message}*")
 
         case "announce":
+            if not is_admin:
+                await send(channel, "🔒 Admin-only command.")
+                await send_workspace_footer(channel, user_id)
+                return
             if not cmd.raw_cmd:
                 await send(channel, "Usage: `/announce <message>`")
             else:
@@ -1801,7 +1980,7 @@ async def on_message(message: discord.Message):
             await send(channel, "❓ Unknown command. `/help`")
 
     # Workspace footer — always show after every command
-    await send_workspace_footer(channel, message.author.id, selector_view=_active_selector_view)
+    await send_workspace_footer(channel, user_id, selector_view=_active_selector_view)
 
 
 # ── Run ──────────────────────────────────────────────────────────────────────

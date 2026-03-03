@@ -112,6 +112,8 @@ async def handle_buildapp(
     claude: ClaudeRunner,
     on_status: Callable[[str, Optional[str]], Awaitable[None]],
     on_ask: Optional[Callable[[str], Awaitable[Optional[str]]]] = None,
+    is_admin: bool = True,
+    owner_id: Optional[int] = None,
 ) -> Optional[str]:
     if not description:
         await on_status("Usage: `/buildapp <description of the app>`", None)
@@ -123,7 +125,7 @@ async def handle_buildapp(
     # 1. Scaffold
     await on_status(f"🏗️ Creating **{app_name}** (Kotlin Multiplatform)...", None)
     await on_status("💡 *I'm still listening — feel free to send other commands while this runs.*", None)
-    scaffold_result = await create_kmp_project(app_name, registry)
+    scaffold_result = await create_kmp_project(app_name, registry, owner_id=owner_id)
     await on_status(scaffold_result.message, None)
 
     if not scaffold_result.success:
@@ -203,10 +205,11 @@ async def handle_buildapp(
         )
         return slug
 
-    # 4. Android demo
-    await on_status("📱 **Android** — launching demo...", None)
-    android_demo = await AndroidPlatform.full_demo(ws_path)
-    await on_status(android_demo.message, android_demo.screenshot_path)
+    # 4. Android demo (admin only — uses emulator)
+    if is_admin:
+        await on_status("📱 **Android** — launching demo...", None)
+        android_demo = await AndroidPlatform.full_demo(ws_path)
+        await on_status(android_demo.message, android_demo.screenshot_path)
 
     # 5. Web build + auto-fix (so anyone can try it in browser)
     await on_status("🌐 **Web** — building and fixing browser version...", None)
@@ -244,60 +247,76 @@ async def handle_buildapp(
             None,
         )
 
-    # 6. iOS build + auto-fix (same as web)
-    await on_status("🍎 **iOS** — building and fixing simulator version...", None)
-    ios_loop = await run_agent_loop(
-        initial_prompt=(
-            "The Android target compiles. Now ensure the iOS target "
-            "also compiles. Fix any iOS-specific issues. "
-            "Only modify what's necessary for iOS compatibility. "
-            f"IMPORTANT: When running xcodebuild, always use: -destination 'name={config.IOS_SIMULATOR_NAME}'"
-        ),
-        workspace_key=slug,
-        workspace_path=ws_path,
-        claude=claude,
-        platform="ios",
-        on_status=loop_status,
-    )
-    ios_loop_summary = format_loop_summary(ios_loop)
-    await on_status(ios_loop_summary, None)
-
+    # 6. iOS build + auto-fix (admin only — uses simulator)
+    ios_loop = None
     ios_demo = None
-    if ios_loop.success:
-        await on_status("📱 Launching iOS demo...", None)
-        ios_demo = await iOSPlatform.full_demo(ws_path)
-        if ios_demo.success:
-            await on_status(ios_demo.message, ios_demo.screenshot_path)
-        else:
-            await on_status("✅ iOS builds but demo failed.", None)
-    else:
-        await on_status(
-            f"⚠️ iOS build had issues. Use `@{slug} Fix the iOS target` to resolve.",
-            None,
+    if is_admin:
+        await on_status("🍎 **iOS** — building and fixing simulator version...", None)
+        ios_loop = await run_agent_loop(
+            initial_prompt=(
+                "The Android target compiles. Now ensure the iOS target "
+                "also compiles. Fix any iOS-specific issues. "
+                "Only modify what's necessary for iOS compatibility. "
+                f"IMPORTANT: When running xcodebuild, always use: -destination 'name={config.IOS_SIMULATOR_NAME}'"
+            ),
+            workspace_key=slug,
+            workspace_path=ws_path,
+            claude=claude,
+            platform="ios",
+            on_status=loop_status,
         )
+        ios_loop_summary = format_loop_summary(ios_loop)
+        await on_status(ios_loop_summary, None)
+
+        if ios_loop.success:
+            await on_status("📱 Launching iOS demo...", None)
+            ios_demo = await iOSPlatform.full_demo(ws_path)
+            if ios_demo.success:
+                await on_status(ios_demo.message, ios_demo.screenshot_path)
+            else:
+                await on_status("✅ iOS builds but demo failed.", None)
+        else:
+            await on_status(
+                f"⚠️ iOS build had issues. Use `@{slug} Fix the iOS target` to resolve.",
+                None,
+            )
 
     # 7. Final summary
     elapsed = int(time.time() - start_time)
     mins, secs = divmod(elapsed, 60)
 
-    build_attempts = loop_result.total_attempts + web_loop.total_attempts + ios_loop.total_attempts
+    build_attempts = loop_result.total_attempts + web_loop.total_attempts
+    if ios_loop:
+        build_attempts += ios_loop.total_attempts
 
     platform_status = []
-    platform_status.append(f"  📱 Android: {'✅' if loop_result.success else '❌'}")
+    if is_admin:
+        platform_status.append(f"  📱 Android: {'✅' if loop_result.success else '❌'}")
     platform_status.append(f"  🌐 Web: {'✅ ' + (web_demo_url or '') if web_loop.success else '❌'}")
-    ios_ok = ios_demo.success if ios_demo else False
-    platform_status.append(f"  🍎 iOS: {'✅' if ios_ok else '❌'}")
+    if is_admin:
+        ios_ok = ios_demo.success if ios_demo else False
+        platform_status.append(f"  🍎 iOS: {'✅' if ios_ok else '❌'}")
+
+    commands_hint = (
+        f"  `@{slug} <prompt>` — add features\n"
+        f"  `/demo web` — see it running\n"
+        f"  `/build web` — rebuild\n"
+        f"  `/fix` — auto-fix build errors"
+    )
+    if is_admin:
+        commands_hint = (
+            f"  `@{slug} <prompt>` — add features\n"
+            f"  `/demo android|ios|web` — see it running\n"
+            f"  `/build android|ios|web` — rebuild a target\n"
+            f"  `/fix` — auto-fix build errors"
+        )
 
     await on_status(
         f"🎉 **{app_name}** built!\n\n"
         f"  ⏱️ Total: {mins}m {secs}s\n"
         f"  🔨 Build attempts: {build_attempts}\n\n"
         + "\n".join(platform_status) + "\n\n"
-        f"Commands:\n"
-        f"  `@{slug} <prompt>` — add features\n"
-        f"  `/demo android|ios|web` — see it running\n"
-        f"  `/build android|ios|web` — rebuild a target\n"
-        f"  `/fix` — auto-fix build errors",
+        f"Commands:\n" + commands_hint,
         None,
     )
 

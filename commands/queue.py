@@ -30,6 +30,7 @@ async def handle_queue(
     claude: ClaudeRunner,
     cost_tracker: CostTracker,
     on_status: Callable[[str, Optional[str]], Awaitable[None]],
+    user_id: Optional[int] = None,
 ) -> None:
     tasks = parse_queue_tasks(raw)
     if not tasks:
@@ -37,12 +38,11 @@ async def handle_queue(
         return
 
     cap = config.DAILY_TOKEN_CAP_USD
-    pct = config.QUEUE_STOP_PCT / 100.0
 
     await on_status(
         f"📋 **Queue started** — {len(tasks)} task(s) in **{workspace_key}**\n"
-        f"  Budget: ${cap:.2f}/day ({config.QUEUE_STOP_PCT}% cap)\n"
-        f"  Already spent today: ${cost_tracker.today_spent():.2f}",
+        f"  Budget: ${cap:.2f}/day\n"
+        f"  Already spent today: ${cost_tracker.today_spent(user_id):.2f}",
         None,
     )
     await on_status("💡 *I'm still listening — feel free to send other commands while this runs.*", None)
@@ -55,11 +55,11 @@ async def handle_queue(
 
     for i, task in enumerate(tasks, 1):
         # Budget check before each task
-        if not cost_tracker.can_afford(cap, pct):
+        if not cost_tracker.can_afford(cap, user_id):
             skipped = len(tasks) - i + 1
             await on_status(
-                f"⛔ **Budget limit reached** — ${cost_tracker.today_spent():.2f} "
-                f"spent (cap: ${cap:.2f} × {config.QUEUE_STOP_PCT}%)\n"
+                f"⛔ **Budget limit reached** — ${cost_tracker.today_spent(user_id):.2f} "
+                f"spent (cap: ${cap:.2f})\n"
                 f"Skipping {skipped} remaining task(s).",
                 None,
             )
@@ -78,7 +78,7 @@ async def handle_queue(
             task, workspace_key, workspace_path, on_progress=progress,
         )
 
-        cost_tracker.add(result.total_cost_usd)
+        cost_tracker.add(result.total_cost_usd, user_id)
         total_cost += result.total_cost_usd
 
         if result.exit_code != 0:

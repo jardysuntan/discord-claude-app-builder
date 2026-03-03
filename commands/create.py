@@ -45,7 +45,7 @@ def _unique_name(app_name: str) -> str:
     return f"{app_name}{int(time.time())}"
 
 
-async def create_kmp_project(app_name: str, registry: WorkspaceRegistry) -> CreateResult:
+async def create_kmp_project(app_name: str, registry: WorkspaceRegistry, owner_id: int | None = None) -> CreateResult:
     """Scaffold a new KMP Compose Multiplatform project."""
     app_name = _unique_name(app_name)
     slug = slugify(app_name)
@@ -118,7 +118,7 @@ async def create_kmp_project(app_name: str, registry: WorkspaceRegistry) -> Crea
     )
 
     # Register workspace
-    registry.add(slug, str(project_dir))
+    registry.add(slug, str(project_dir), owner_id=owner_id)
 
     return CreateResult(
         message=(

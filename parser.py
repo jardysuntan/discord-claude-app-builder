@@ -183,6 +183,16 @@ def parse(text: str) -> ParseResult:
             case "/spend":
                 return Command(name="spend")
 
+            # ── User management ───────────────────────────────────────
+            case "/allow":
+                return Command(name="allow", raw_cmd=rest or None)
+            case "/disallow":
+                return Command(name="disallow", raw_cmd=rest or None)
+            case "/setcap":
+                return Command(name="setcap", raw_cmd=rest or None)
+            case "/users":
+                return Command(name="users")
+
             # ── Memory & system ──────────────────────────────────────
             case "/memory":
                 mem_parts = rest.split(None, 1)

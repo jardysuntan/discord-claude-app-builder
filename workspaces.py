@@ -1,5 +1,6 @@
 """
 workspaces.py — Workspace registry backed by workspaces.json.
+Supports per-user ownership with auto-migration from legacy format.
 """
 
 import json
@@ -11,7 +12,7 @@ import config
 
 class WorkspaceRegistry:
     def __init__(self):
-        self._workspaces: dict[str, str] = {}
+        self._workspaces: dict[str, dict] = {}  # key -> {"path": str, "owner_id": int}
         self._user_defaults: dict[int, str] = {}
         self._user_platforms: dict[int, str] = {}
         self._defaults_path = Path(config.WORKSPACES_PATH).parent / "user_defaults.json"
@@ -23,7 +24,8 @@ class WorkspaceRegistry:
         path = Path(config.WORKSPACES_PATH)
         if path.exists():
             with open(path) as f:
-                self._workspaces = json.load(f)
+                raw = json.load(f)
+            self._workspaces = self._migrate(raw)
         else:
             self._workspaces = {}
         # Load persisted user defaults
@@ -43,17 +45,60 @@ class WorkspaceRegistry:
             except (json.JSONDecodeError, ValueError):
                 self._user_platforms = {}
 
-    def list_keys(self) -> list[str]:
-        return sorted(self._workspaces.keys())
+    def _migrate(self, raw: dict) -> dict[str, dict]:
+        """Auto-migrate legacy string values to {path, owner_id} dicts."""
+        migrated = False
+        result = {}
+        for key, value in raw.items():
+            if isinstance(value, str):
+                # Legacy format: key -> path_string
+                result[key] = {"path": value, "owner_id": config.DISCORD_ALLOWED_USER_ID}
+                migrated = True
+            elif isinstance(value, dict):
+                result[key] = value
+            else:
+                continue  # skip invalid entries
+        if migrated:
+            self._workspaces = result
+            self._save()
+        return result
+
+    def list_keys(self, owner_id: Optional[int] = None) -> list[str]:
+        """List workspace keys. If owner_id given, filter to that user's workspaces."""
+        if owner_id is None:
+            return sorted(self._workspaces.keys())
+        return sorted(
+            k for k, v in self._workspaces.items()
+            if v.get("owner_id") == owner_id
+        )
+
+    def can_access(self, key: str, user_id: int, is_admin: bool) -> bool:
+        """Check if user can access a workspace. Admin can access all."""
+        if is_admin:
+            return True
+        entry = self._workspaces.get(key.lower())
+        if not entry:
+            return False
+        return entry.get("owner_id") == user_id
+
+    def get_owner(self, key: str) -> Optional[int]:
+        entry = self._workspaces.get(key.lower())
+        return entry.get("owner_id") if entry else None
 
     def get_path(self, key: str) -> Optional[str]:
-        return self._workspaces.get(key.lower())
+        entry = self._workspaces.get(key.lower())
+        if entry is None:
+            return None
+        return entry.get("path") if isinstance(entry, dict) else entry
 
     def exists(self, key: str) -> bool:
         return key.lower() in self._workspaces
 
-    def add(self, key: str, path: str):
-        self._workspaces[key.lower()] = path
+    def add(self, key: str, path: str, owner_id: Optional[int] = None):
+        self._workspaces[key.lower()] = {
+            "path": path,
+            "owner_id": owner_id or config.DISCORD_ALLOWED_USER_ID,
+        }
         self._save()
 
     def remove(self, key: str):
@@ -66,8 +111,8 @@ class WorkspaceRegistry:
         new_key = new_key.lower()
         if old_key not in self._workspaces or new_key in self._workspaces:
             return False
-        path = self._workspaces.pop(old_key)
-        self._workspaces[new_key] = path
+        entry = self._workspaces.pop(old_key)
+        self._workspaces[new_key] = entry
         # Update any user defaults pointing to the old key
         for uid, default in self._user_defaults.items():
             if default == old_key:
