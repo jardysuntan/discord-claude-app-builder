@@ -48,6 +48,13 @@ ASC_KEY_ID: str = os.getenv("ASC_KEY_ID", "")
 ASC_ISSUER_ID: str = os.getenv("ASC_ISSUER_ID", "")
 ASC_KEY_PATH: str = os.getenv("ASC_KEY_PATH", "")
 
+# ── Google Play (Internal Testing) ──────────────────────────────────────────
+PLAY_JSON_KEY_PATH: str = os.getenv("PLAY_JSON_KEY_PATH", "")
+ANDROID_KEYSTORE_PATH: str = os.getenv("ANDROID_KEYSTORE_PATH", "")
+ANDROID_KEY_ALIAS: str = os.getenv("ANDROID_KEY_ALIAS", "release-key")
+ANDROID_KEYSTORE_PASSWORD: str = os.getenv("ANDROID_KEYSTORE_PASSWORD", "")
+ANDROID_KEY_PASSWORD: str = os.getenv("ANDROID_KEY_PASSWORD", "")
+
 # ── Web ──────────────────────────────────────────────────────────────────────
 WEB_SERVE_PORT: int = int(os.getenv("WEB_SERVE_PORT", "9000"))
 DASHBOARD_PORT: int = int(os.getenv("DASHBOARD_PORT", "9001"))
@@ -60,6 +67,10 @@ TEMPLATE_OLD_PKG: str = os.getenv("TEMPLATE_OLD_PKG", "com.jaredtan.kmptemplate"
 # ── Mirror (ws-scrcpy for Android) ──────────────────────────────────────────
 SCRCPY_DIR: str = os.getenv("SCRCPY_DIR", os.path.expanduser("~/tools/ws-scrcpy"))
 SCRCPY_PORT: int = int(os.getenv("SCRCPY_PORT", "8000"))
+
+# ── Email (for sending build artifacts) ────────────────────────────────────────
+GMAIL_ADDRESS: str = os.getenv("GMAIL_ADDRESS", "")
+GMAIL_APP_PASSWORD: str = os.getenv("GMAIL_APP_PASSWORD", "")
 
 # ── Supabase ──────────────────────────────────────────────────────────────────
 SUPABASE_PROJECT_REF: str = os.getenv("SUPABASE_PROJECT_REF", "")
@@ -98,4 +109,5 @@ def print_config_summary():
     print(f"  Web port:        {WEB_SERVE_PORT}")
     print(f"  Tailscale:       {TAILSCALE_HOSTNAME or '(not set)'}")
     print(f"  TestFlight:      {'configured' if APPLE_TEAM_ID and ASC_KEY_ID else 'not configured'}")
+    print(f"  Play Store:      {'configured' if PLAY_JSON_KEY_PATH else 'not configured'}")
     print(f"  Supabase:        {'configured' if SUPABASE_PROJECT_REF and SUPABASE_MANAGEMENT_KEY else 'not configured'}")

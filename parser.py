@@ -115,6 +115,9 @@ def parse(text: str) -> ParseResult:
             case "/testflight":
                 return Command(name="testflight")
 
+            case "/playstore":
+                return Command(name="playstore")
+
             case "/vid" | "/viddemo":
                 return Command(name="vid", platform="android")
 

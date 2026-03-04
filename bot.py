@@ -22,6 +22,8 @@ from commands import git_cmd
 from commands.bot_todo import handle_bot_todo
 from commands.dashboard import handle_dashboard
 from commands.testflight import handle_testflight, TestFlightResult
+from commands.playstore import handle_playstore, PlayStoreResult
+from commands.playstore_state import PlayStoreState
 from cost_tracker import CostTracker
 from allowlist import Allowlist
 from commands.create import create_kmp_project
@@ -262,6 +264,23 @@ class WorkspaceButton(discord.ui.Button):
                 await self.view.footer_message.edit(content=f"📂 workspace: **{self.ws_key}**")
             except Exception:
                 pass
+        # Show incomplete Play Store checklist if exists
+        _btn_ws_path = registry.get_path(self.ws_key)
+        if _btn_ws_path and PlayStoreState.exists(_btn_ws_path):
+            _btn_state = PlayStoreState.load(_btn_ws_path)
+            if not _btn_state.all_done():
+                from platforms import AndroidPlatform as _AP3
+                _btn_pkg = _AP3.parse_app_id(_btn_ws_path) or ""
+                _btn_app = self.ws_key.replace("-", " ").replace("_", " ").title()
+                _btn_view = PlayStoreChecklistView(
+                    self.owner_id, self.ws_key, _btn_ws_path, _btn_app, _btn_pkg,
+                )
+                await interaction.channel.send(
+                    embed=_playstore_checklist_embed(
+                        self.ws_key, _btn_app, _btn_pkg, _btn_view.state,
+                    ),
+                    view=_btn_view,
+                )
 
 
 # ── Data-interview guard ─────────────────────────────────────────────────
@@ -828,6 +847,430 @@ def _testflight_success_embed(workspace_key: str, bundle_id: str) -> discord.Emb
     return embed
 
 
+# ── Play Store JSON key upload tracking ────────────────────────────────
+# Maps user_id → (ws_key, ws_path, checklist_message)
+_awaiting_json_upload: dict[int, tuple[str, str, discord.Message]] = {}
+
+
+class PlayStoreChecklistView(discord.ui.View):
+    """Interactive checklist for Play Store setup — dynamic buttons based on state."""
+
+    def __init__(self, owner_id: int, ws_key: str, ws_path: str,
+                 app_name: str, package_name: str):
+        super().__init__(timeout=600)
+        self.owner_id = owner_id
+        self.ws_key = ws_key
+        self.ws_path = ws_path
+        self.app_name = app_name
+        self.package_name = package_name
+        self.state = PlayStoreState.load(ws_path)
+        self._rebuild_buttons()
+
+    def _rebuild_buttons(self):
+        self.clear_items()
+        s = self.state
+
+        if not s.developer_account_confirmed:
+            self.add_item(_ChecklistButton(
+                "I have a dev account", discord.ButtonStyle.success,
+                "dev_account", self,
+            ))
+        else:
+            self.add_item(_ChecklistButton(
+                "Undo: dev account", discord.ButtonStyle.secondary,
+                "undo_dev_account", self,
+            ))
+
+        if not s.app_created:
+            self.add_item(_ChecklistButton(
+                "App created", discord.ButtonStyle.success,
+                "app_created", self,
+            ))
+        else:
+            self.add_item(_ChecklistButton(
+                "Undo: app created", discord.ButtonStyle.secondary,
+                "undo_app_created", self,
+            ))
+
+        if not s.has_json_key():
+            self.add_item(_ChecklistButton(
+                "Upload JSON Key", discord.ButtonStyle.primary,
+                "upload_key", self,
+            ))
+
+        if s.has_json_key() and not s.has_uploaded():
+            self.add_item(_ChecklistButton(
+                "Build & Upload", discord.ButtonStyle.success,
+                "build_upload", self, emoji="🚀",
+            ))
+
+        if s.has_uploaded() and not s.testers_confirmed:
+            self.add_item(_ChecklistButton(
+                "Add invite link", discord.ButtonStyle.primary,
+                "add_invite_link", self, emoji="🔗",
+            ))
+
+        if s.invite_link:
+            self.add_item(_ChecklistButton(
+                "Share link", discord.ButtonStyle.secondary,
+                "share_link", self, emoji="📤",
+            ))
+
+        self.add_item(discord.ui.Button(
+            label="Open Play Console",
+            style=discord.ButtonStyle.link,
+            url="https://play.google.com/console",
+            emoji="🔗",
+        ))
+
+    async def _handle_action(self, action: str, interaction: discord.Interaction):
+        if interaction.user.id != self.owner_id:
+            return await interaction.response.send_message("Not your command.", ephemeral=True)
+
+        s = self.state
+        ch = interaction.channel
+
+        if action == "dev_account":
+            s.developer_account_confirmed = True
+            s.save(self.ws_path)
+            self._rebuild_buttons()
+            await interaction.response.edit_message(
+                embed=_playstore_checklist_embed(self.ws_key, self.app_name, self.package_name, s),
+                view=self,
+            )
+
+        elif action == "undo_dev_account":
+            s.developer_account_confirmed = False
+            s.save(self.ws_path)
+            self._rebuild_buttons()
+            await interaction.response.edit_message(
+                embed=_playstore_checklist_embed(self.ws_key, self.app_name, self.package_name, s),
+                view=self,
+            )
+
+        elif action == "app_created":
+            s.app_created = True
+            s.save(self.ws_path)
+            self._rebuild_buttons()
+            await interaction.response.edit_message(
+                embed=_playstore_checklist_embed(self.ws_key, self.app_name, self.package_name, s),
+                view=self,
+            )
+
+        elif action == "undo_app_created":
+            s.app_created = False
+            s.save(self.ws_path)
+            self._rebuild_buttons()
+            await interaction.response.edit_message(
+                embed=_playstore_checklist_embed(self.ws_key, self.app_name, self.package_name, s),
+                view=self,
+            )
+
+        elif action == "upload_key":
+            _awaiting_json_upload[interaction.user.id] = (
+                self.ws_key, self.ws_path, interaction.message,
+            )
+            await interaction.response.send_message(
+                "📎 Send me the service account `.json` key file as an attachment.\n"
+                "*(Play Console → Setup → API access → service account → key)*\n"
+                "This will expire in 5 minutes.",
+                ephemeral=True,
+            )
+            # Auto-expire after 5 min
+            loop = asyncio.get_event_loop()
+            uid = interaction.user.id
+            loop.call_later(300, lambda: _awaiting_json_upload.pop(uid, None))
+
+        elif action == "build_upload":
+            self.stop()
+            await interaction.response.edit_message(view=None)
+            async def ps_status(msg, fpath=None):
+                await send(ch, msg, file_path=fpath)
+            result = await handle_playstore(
+                self.ws_key, self.ws_path, on_status=ps_status,
+                key_path=s.json_key_path,
+            )
+            if result and result.success:
+                s.api_access_verified = True
+                s.last_upload_version_code = result.version_code
+                s.last_upload_timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                s.save(self.ws_path)
+                await ch.send(embed=_playstore_success_embed(self.ws_key, self.package_name))
+                if not s.testers_confirmed:
+                    new_view = PlayStoreChecklistView(
+                        self.owner_id, self.ws_key, self.ws_path,
+                        self.app_name, self.package_name,
+                    )
+                    await ch.send(
+                        embed=_playstore_checklist_embed(
+                            self.ws_key, self.app_name, self.package_name, new_view.state,
+                        ),
+                        view=new_view,
+                    )
+            elif result and result.first_upload and result.aab_path:
+                # First upload — ask for email to send the AAB
+                email_view = _EmailAABView(
+                    self.owner_id, result.aab_path,
+                    self.ws_key, self.package_name, ch,
+                )
+                await ch.send(
+                    "📧 **Enter your email** to receive the AAB file, then upload it to Play Console.\n"
+                    "*(This is only needed for the first upload — future uploads are automatic)*",
+                    view=email_view,
+                )
+
+        elif action == "add_invite_link":
+            modal = _InviteLinkModal(self)
+            await interaction.response.send_modal(modal)
+
+        elif action == "share_link":
+            if s.invite_link:
+                await interaction.response.send_message(
+                    f"🎉 **{self.app_name}** is ready for testing!\n\n"
+                    f"**[Tap here to install]({s.invite_link})**\n\n"
+                    f"Open the link on your Android phone → accept the invite → "
+                    f"install from Play Store.\n"
+                    f"*(You must be added as a tester to access it)*",
+                )
+            else:
+                await interaction.response.send_message(
+                    "No invite link saved yet.", ephemeral=True,
+                )
+
+    async def on_timeout(self):
+        try:
+            for item in self.children:
+                if not isinstance(item, discord.ui.Button) or item.style != discord.ButtonStyle.link:
+                    item.disabled = True
+        except Exception:
+            pass
+
+
+class _EmailModal(discord.ui.Modal, title="Email AAB"):
+    email = discord.ui.TextInput(
+        label="Your email address",
+        placeholder="you@example.com",
+        required=True,
+        max_length=100,
+    )
+
+    def __init__(self, aab_path, ws_key, package_name, channel):
+        super().__init__()
+        self.aab_path = aab_path
+        self.ws_key = ws_key
+        self.package_name = package_name
+        self.channel = channel
+
+    async def on_submit(self, interaction: discord.Interaction):
+        to_email = self.email.value.strip()
+        await interaction.response.send_message(f"Sending AAB to `{to_email}`...", ephemeral=True)
+
+        from commands.playstore import _email_file
+        sent = await _email_file(
+            self.aab_path, to_email,
+            subject=f"[{self.ws_key}] AAB build — upload to Play Console",
+            body=(
+                f"Your app {self.ws_key} ({self.package_name}) was built successfully.\n\n"
+                f"Upload the attached .aab file to Google Play Console:\n\n"
+                f"1. Open https://play.google.com/console\n"
+                f"2. Select your app\n"
+                f"3. Go to Testing > Internal testing\n"
+                f"4. Tap 'Create new release'\n"
+                f"5. Upload the attached .aab file\n"
+                f"6. Tap 'Next' (skip any warnings about signing key)\n"
+                f"7. Tap 'Save and roll out to Internal testing'\n"
+                f"8. Confirm the rollout\n\n"
+                f"After this first manual upload, future /playstore commands "
+                f"will upload automatically."
+            ),
+        )
+        if sent:
+            await self.channel.send(
+                f"📧 **AAB sent to `{to_email}`!**\n\n"
+                f"**Steps:**\n"
+                f"1. Open the email and download the `.aab` file\n"
+                f"2. [Open Play Console](https://play.google.com/console) → your app\n"
+                f"3. **Testing → Internal testing → Create new release**\n"
+                f"4. Upload the `.aab` file\n"
+                f"5. Tap **Next** (skip any signing key warnings)\n"
+                f"6. Tap **Save and roll out to Internal testing**\n"
+                f"7. Confirm the rollout\n\n"
+                f"After this, future `/playstore` uploads will be fully automatic!"
+            )
+        else:
+            await self.channel.send(
+                "❌ Failed to send email. Check that `GMAIL_ADDRESS` and "
+                "`GMAIL_APP_PASSWORD` are set in `.env`.\n"
+                "Get an app password at: https://myaccount.google.com/apppasswords"
+            )
+
+
+class _InviteLinkModal(discord.ui.Modal, title="Internal Testing Invite Link"):
+    link = discord.ui.TextInput(
+        label="Paste the invite link from Play Console",
+        placeholder="https://play.google.com/apps/internaltest/...",
+        required=True,
+        max_length=300,
+    )
+
+    def __init__(self, checklist_view):
+        super().__init__()
+        self.checklist_view = checklist_view
+
+    async def on_submit(self, interaction: discord.Interaction):
+        url = self.link.value.strip()
+        v = self.checklist_view
+        v.state.invite_link = url
+        v.state.testers_confirmed = True
+        v.state.save(v.ws_path)
+        v._rebuild_buttons()
+        await interaction.response.edit_message(
+            embed=_playstore_checklist_embed(v.ws_key, v.app_name, v.package_name, v.state),
+            view=v,
+        )
+        # Send a shareable message
+        await interaction.channel.send(
+            f"🎉 **{v.app_name}** is ready for testing!\n\n"
+            f"**[Tap here to install]({url})**\n\n"
+            f"Open the link on your Android phone → accept the invite → install from Play Store.\n"
+            f"*(You must be added as a tester to access it)*"
+        )
+
+
+class _EmailAABView(discord.ui.View):
+    """View with a button that opens the email modal."""
+
+    def __init__(self, owner_id, aab_path, ws_key, package_name, channel):
+        super().__init__(timeout=600)
+        self.owner_id = owner_id
+        self.aab_path = aab_path
+        self.ws_key = ws_key
+        self.package_name = package_name
+        self.channel = channel
+
+    @discord.ui.button(label="Enter email", style=discord.ButtonStyle.primary, emoji="📧")
+    async def email_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.owner_id:
+            return await interaction.response.send_message("Not your command.", ephemeral=True)
+        modal = _EmailModal(self.aab_path, self.ws_key, self.package_name, self.channel)
+        await interaction.response.send_modal(modal)
+
+
+class _ChecklistButton(discord.ui.Button):
+    """Generic button that delegates back to PlayStoreChecklistView."""
+
+    def __init__(self, label, style, action, parent_view, emoji=None):
+        super().__init__(label=label, style=style, emoji=emoji)
+        self.action = action
+        self.parent_view = parent_view
+
+    async def callback(self, interaction: discord.Interaction):
+        await self.parent_view._handle_action(self.action, interaction)
+
+
+def _playstore_checklist_embed(ws_key, app_name, package_name, state: PlayStoreState):
+    """Single embed showing all setup steps with check/uncheck status."""
+
+    def _step(done, num, title, detail=""):
+        icon = "✅" if done else "⬜"
+        line = f"{icon} **{num}.** {title}"
+        if detail:
+            line += f"\n\u2003\u2003{detail}"
+        return line
+
+    steps = "\n".join([
+        _step(
+            state.developer_account_confirmed, 1,
+            "Google Play Developer Account",
+            "confirmed" if state.developer_account_confirmed else
+            "[Sign up here](https://play.google.com/console/signup) — costs $25\n"
+            "\u2003\u2003Google will ask to verify your identity (takes a few days)\n"
+            "\u2003\u2003Once verified, tap **I have a dev account** below",
+        ),
+        _step(
+            state.app_created, 2,
+            "Create app in Play Console",
+            f"`{app_name}` · `{package_name}`" if state.app_created else
+            "[Open Play Console](https://play.google.com/console) → **Create app**\n"
+            "\u2003\u2003Pick any name — the package name gets set automatically on first upload\n"
+            "\u2003\u2003Then tap **App created** below",
+        ),
+        _step(
+            state.has_json_key(), 3,
+            "Set up API access",
+            "key uploaded" if state.has_json_key() else
+            "**a.** [Open Google Cloud Console](https://console.cloud.google.com) → **New Project** → name it anything\n"
+            "\u2003\u2003**b.** Search **\"Google Play Android Developer API\"** → **Enable**\n"
+            "\u2003\u2003**c.** Sidebar → **IAM & Admin → Service Accounts → Create Service Account**\n"
+            "\u2003\u2003**d.** Click into it → **Keys** tab → **Add Key → JSON** → downloads a `.json` file\n"
+            "\u2003\u2003**e.** [Play Console → Users](https://play.google.com/console/users-and-permissions) → "
+            "**Invite** the service account email → give **Admin** access\n"
+            "\u2003\u2003**f.** Tap **Upload JSON Key** below and send me the `.json` file",
+        ),
+        _step(
+            state.has_uploaded(), 4,
+            "Build & upload to Play Store",
+            (f"v`{state.last_upload_version_code}` · {state.last_upload_timestamp}"
+             if state.has_uploaded()
+             else "Tap **Build & Upload** below — I'll build the app and upload it\n"
+             "\u2003\u2003First upload: I'll send you the file to upload manually in Play Console\n"
+             "\u2003\u2003After that, future uploads are fully automatic"),
+        ),
+        _step(
+            state.testers_confirmed, 5,
+            "Share with testers",
+            (f"[Tap here to install]({state.invite_link}) — tap **Share link** to reshare"
+             if state.testers_confirmed and state.invite_link else
+             "done" if state.testers_confirmed else
+             "[Open Play Console](https://play.google.com/console) → your app → "
+             "**Testing → Internal testing**\n"
+             "\u2003\u2003**a.** Under **Testers**, tap **Create email list** → add your testers' emails → **Save**\n"
+             "\u2003\u2003⚠️ **Make sure to add your own email too** so you can install & test it!\n"
+             "\u2003\u2003**b.** Scroll down to **How testers join your test** → copy the **invite link**\n"
+             "\u2003\u2003**c.** Tap **Add invite link** below and paste it"),
+        ),
+    ])
+
+    embed = discord.Embed(
+        title=f"📲 Play Store setup — {ws_key}",
+        description=steps,
+        color=0x01875F,
+    )
+    return embed
+
+
+def _playstore_success_embed(workspace_key: str, package_name: str) -> discord.Embed:
+    """Info embed shown after a successful Play Store upload."""
+    embed = discord.Embed(
+        title="🎉 Your app is on Google Play internal testing!",
+        description=(
+            "Google Play is processing the build — this usually takes **1-5 minutes**.\n"
+            "I'll notify you when it's ready."
+        ),
+        color=0x01875F,  # Play Store green
+    )
+    embed.add_field(
+        name="Next: share with testers",
+        value=(
+            "1. [Open Play Console](https://play.google.com/console) → your app → "
+            "**Testing → Internal testing**\n"
+            "2. Under **Testers** → **Create email list** → add tester emails → **Save**\n"
+            "3. Copy the **invite link** (under *How testers join your test*)\n"
+            "4. Tap **Add invite link** on the checklist below to save & share it"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Pushing updates",
+        value=(
+            f"Just run `/playstore` again — future uploads are fully automatic.\n"
+            "Internal testers see the new version automatically."
+        ),
+        inline=False,
+    )
+    return embed
+
+
 def _ios_deploy_info_embed() -> discord.Embed:
     """Info embed explaining how iOS deployment works via TestFlight."""
     embed = discord.Embed(
@@ -972,6 +1415,7 @@ def help_text(is_admin: bool = True):
         "`/demo web` — build + preview",
         "`/fix [instructions]` — auto-fix build errors",
         "`/testflight` — upload to TestFlight",
+        "`/playstore` — upload to Google Play",
     ]
     if is_admin:
         lines += [
@@ -1064,6 +1508,33 @@ async def on_message(message: discord.Message):
     global maintenance_mode, maintenance_message
     if message.author.bot:
         return
+
+    # ── Play Store JSON key upload ────────────────────────────────────
+    uid = message.author.id
+    if uid in _awaiting_json_upload and message.attachments:
+        att = next((a for a in message.attachments if a.filename.endswith(".json")), None)
+        if att:
+            ws_key, ws_path, checklist_msg = _awaiting_json_upload.pop(uid)
+            dest = Path(ws_path) / "play-service-account.json"
+            await att.save(dest)
+            state = PlayStoreState.load(ws_path)
+            state.json_key_path = str(dest)
+            state.save(ws_path)
+            # Parse app info for embed
+            from platforms import AndroidPlatform
+            pkg = AndroidPlatform.parse_app_id(ws_path) or ""
+            app_name = ws_key.replace("-", " ").replace("_", " ").title()
+            # Re-render checklist
+            new_view = PlayStoreChecklistView(uid, ws_key, ws_path, app_name, pkg)
+            try:
+                await checklist_msg.edit(
+                    embed=_playstore_checklist_embed(ws_key, app_name, pkg, new_view.state),
+                    view=new_view,
+                )
+            except Exception:
+                pass
+            await message.channel.send(f"✅ Service account key saved for **{ws_key}**.")
+            return
 
     text = message.content.strip()
     if not text:
@@ -1293,6 +1764,23 @@ async def on_message(message: discord.Message):
                 await send(channel, "You don't have access to that workspace.")
             elif registry.set_default(user_id, cmd.workspace):
                 await send(channel, f"✅ Default → **{cmd.workspace}**")
+                # Show incomplete Play Store checklist if exists
+                _use_ws_path = registry.get_path(cmd.workspace)
+                if _use_ws_path and PlayStoreState.exists(_use_ws_path):
+                    _use_state = PlayStoreState.load(_use_ws_path)
+                    if not _use_state.all_done():
+                        from platforms import AndroidPlatform as _AP2
+                        _use_pkg = _AP2.parse_app_id(_use_ws_path) or ""
+                        _use_app = cmd.workspace.replace("-", " ").replace("_", " ").title()
+                        _use_view = PlayStoreChecklistView(
+                            user_id, cmd.workspace, _use_ws_path, _use_app, _use_pkg,
+                        )
+                        await channel.send(
+                            embed=_playstore_checklist_embed(
+                                cmd.workspace, _use_app, _use_pkg, _use_view.state,
+                            ),
+                            view=_use_view,
+                        )
             else:
                 await send(channel, f"❌ Could not set default.")
 
@@ -1505,6 +1993,59 @@ async def on_message(message: discord.Message):
                         await channel.send(embed=_testflight_success_embed(
                             ws_key, result.bundle_id,
                         ))
+
+        case "playstore":
+            if not config.AGENT_MODE:
+                await send(channel, "🔒 Agent mode OFF.")
+            else:
+                ws_key, ws_path = registry.resolve(None, user_id)
+                if not ws_path:
+                    await send(channel, "❌ No workspace set.")
+                else:
+                    from platforms import AndroidPlatform as _AP
+                    pkg = _AP.parse_app_id(ws_path) or ""
+                    app_name = ws_key.replace("-", " ").replace("_", " ").title()
+                    state = PlayStoreState.load(ws_path)
+
+                    if state.has_json_key():
+                        # All prereqs done — build & upload directly
+                        async def ps_status(msg, fpath=None):
+                            await send(channel, msg, file_path=fpath)
+                        result = await handle_playstore(
+                            ws_key, ws_path, on_status=ps_status,
+                            key_path=state.json_key_path,
+                        )
+                        if result and result.success:
+                            state.last_upload_version_code = result.version_code
+                            state.last_upload_timestamp = time.strftime(
+                                "%Y-%m-%dT%H:%M:%SZ", time.gmtime(),
+                            )
+                            state.save(ws_path)
+                            await channel.send(embed=_playstore_success_embed(
+                                ws_key, pkg or result.package_name,
+                            ))
+                        elif result and result.first_upload and result.aab_path:
+                            email_view = _EmailAABView(
+                                user_id, result.aab_path,
+                                ws_key, pkg, channel,
+                            )
+                            await channel.send(
+                                "📧 **Enter your email** to receive the AAB file, "
+                                "then upload it to Play Console.\n"
+                                "*(This is only needed for the first upload — "
+                                "future uploads are automatic)*",
+                                view=email_view,
+                            )
+                    else:
+                        # Show checklist
+                        state.save(ws_path)  # persist initial state
+                        view = PlayStoreChecklistView(
+                            user_id, ws_key, ws_path, app_name, pkg,
+                        )
+                        await channel.send(
+                            embed=_playstore_checklist_embed(ws_key, app_name, pkg, view.state),
+                            view=view,
+                        )
 
         case "vid":
             if not config.AGENT_MODE:
@@ -1901,6 +2442,13 @@ async def on_message(message: discord.Message):
                 if not config.ASC_ISSUER_ID:
                     missing_tf.append("ASC_ISSUER_ID")
                 checks.append(f"❌ **TestFlight** — missing: `{', '.join(missing_tf)}`")
+
+            # Play Store
+            has_ps = bool(config.PLAY_JSON_KEY_PATH)
+            if has_ps:
+                checks.append(f"✅ **Play Store** — key: `{Path(config.PLAY_JSON_KEY_PATH).name}`")
+            else:
+                checks.append("❌ **Play Store** — missing: `PLAY_JSON_KEY_PATH`")
 
             # Web
             checks.append(f"✅ **Web** — port `{config.WEB_SERVE_PORT}`")

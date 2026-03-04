@@ -214,6 +214,168 @@ class AndroidPlatform:
             screenshot_path=screenshot,
         )
 
+    # ── Play Store helpers ────────────────────────────────────────────────
+
+    @staticmethod
+    def _find_gradle_file(workspace_path: str) -> Optional[Path]:
+        """Find the composeApp build.gradle.kts (or fallback variants)."""
+        for name in ["composeApp/build.gradle.kts", "androidApp/build.gradle.kts",
+                      "composeApp/build.gradle", "app/build.gradle.kts"]:
+            p = Path(workspace_path) / name
+            if p.exists():
+                return p
+        return None
+
+    @staticmethod
+    def set_version_code(workspace_path: str, code: int) -> bool:
+        """Set versionCode in build.gradle.kts."""
+        gradle = AndroidPlatform._find_gradle_file(workspace_path)
+        if not gradle:
+            return False
+        text = gradle.read_text()
+        new_text = re.sub(r'versionCode\s*=?\s*\d+', f'versionCode = {code}', text)
+        if new_text == text:
+            # No existing versionCode — inject after applicationId
+            new_text = re.sub(
+                r'(applicationId\s*=?\s*"[^"]+")',
+                rf'\1\n            versionCode = {code}',
+                text,
+            )
+        gradle.write_text(new_text)
+        return True
+
+    @staticmethod
+    def inject_signing_config(workspace_path: str, ks_path: str, alias: str,
+                              store_pw: str, key_pw: str) -> bool:
+        """Inject signingConfigs block and wire it to release buildType. Skip if already present."""
+        gradle = AndroidPlatform._find_gradle_file(workspace_path)
+        if not gradle:
+            return False
+        text = gradle.read_text()
+        if "signingConfigs" in text:
+            return True  # already configured
+
+        signing_block = (
+            '    signingConfigs {\n'
+            '        create("release") {\n'
+            f'            storeFile = file("{ks_path}")\n'
+            f'            storePassword = "{store_pw}"\n'
+            f'            keyAlias = "{alias}"\n'
+            f'            keyPassword = "{key_pw}"\n'
+            '        }\n'
+            '    }\n'
+        )
+
+        # Insert signingConfigs before buildTypes (or at end of android block)
+        if "buildTypes" in text:
+            text = text.replace("buildTypes", signing_block + "    buildTypes", 1)
+        else:
+            # Insert before the closing brace of android { }
+            text = re.sub(r'(android\s*\{.*?)(^\})', rf'\1{signing_block}\2',
+                          text, count=1, flags=re.DOTALL | re.MULTILINE)
+
+        # Wire release buildType to use the signing config
+        if 'release {' in text or 'release{' in text:
+            # Add signingConfig inside existing release block
+            text = re.sub(
+                r'(release\s*\{)',
+                r'\1\n                signingConfig = signingConfigs.getByName("release")',
+                text, count=1,
+            )
+        else:
+            # No release buildType — add one after signingConfigs
+            release_block = (
+                '    buildTypes {\n'
+                '        release {\n'
+                '            signingConfig = signingConfigs.getByName("release")\n'
+                '        }\n'
+                '    }\n'
+            )
+            if "buildTypes" not in text:
+                text = text.replace(signing_block, signing_block + release_block)
+
+        gradle.write_text(text)
+        return True
+
+    @staticmethod
+    async def bundle_release(workspace_path: str) -> BuildResult:
+        """Run bundleRelease and return the AAB path."""
+        rc, out, err = await _run(
+            ["./gradlew", "composeApp:bundleRelease"],
+            cwd=workspace_path, timeout=600,
+        )
+        raw = out + err
+        if rc != 0:
+            return BuildResult(success=False, output=raw, error=extract_build_error(raw))
+
+        # Find the .aab file
+        aab_dir = Path(workspace_path) / "composeApp" / "build" / "outputs" / "bundle" / "release"
+        aabs = list(aab_dir.glob("*.aab")) if aab_dir.exists() else []
+        if not aabs:
+            # Fallback search
+            for aab in Path(workspace_path).rglob("*.aab"):
+                if "release" in str(aab):
+                    aabs = [aab]
+                    break
+        if aabs:
+            return BuildResult(success=True, output=str(aabs[0]))
+        return BuildResult(success=False, output=raw, error="Build succeeded but no .aab found")
+
+    @staticmethod
+    async def generate_keystore(workspace_path: str, alias: str, password: str) -> tuple[bool, str]:
+        """Generate a release keystore in the workspace. Returns (success, keystore_path)."""
+        ks_path = str(Path(workspace_path) / "release.keystore")
+        if Path(ks_path).exists():
+            return True, ks_path
+
+        rc, out, err = await _run([
+            "keytool", "-genkeypair",
+            "-v",
+            "-keystore", ks_path,
+            "-alias", alias,
+            "-keyalg", "RSA",
+            "-keysize", "2048",
+            "-validity", "10000",
+            "-storepass", password,
+            "-keypass", password,
+            "-dname", "CN=App,O=App,L=Unknown,ST=Unknown,C=US",
+        ], timeout=30)
+        if rc == 0:
+            return True, ks_path
+        return False, (out + err)[:500]
+
+
+def preflight_fix_android(workspace_path: str) -> list[str]:
+    """Auto-fix common Play Store issues. Returns list of fixes applied."""
+    fixes = []
+    gradle = AndroidPlatform._find_gradle_file(workspace_path)
+    if not gradle:
+        return fixes
+
+    text = gradle.read_text()
+
+    # Ensure minSdk >= 21
+    m = re.search(r'minSdk\s*=?\s*(\d+)', text)
+    if m and int(m.group(1)) < 21:
+        text = re.sub(r'minSdk\s*=?\s*\d+', 'minSdk = 21', text)
+        fixes.append(f"Bumped minSdk from {m.group(1)} to 21")
+        gradle.write_text(text)
+
+    # Ensure app icon exists (res/mipmap-hdpi)
+    res_dir = Path(workspace_path) / "composeApp" / "src" / "androidMain" / "res"
+    mipmap = res_dir / "mipmap-hdpi"
+    icon = mipmap / "ic_launcher.png"
+    if not icon.exists():
+        mipmap.mkdir(parents=True, exist_ok=True)
+        # Create a minimal 72x72 green PNG (valid 1-pixel scaled)
+        template_icon = Path(config.TEMPLATES_DIR).expanduser() / "kmp" / "KMPTemplate" / "composeApp" / "src" / "androidMain" / "res" / "mipmap-hdpi" / "ic_launcher.png"
+        if template_icon.exists():
+            import shutil as _shutil
+            _shutil.copy2(template_icon, icon)
+            fixes.append("Added default Android app icon")
+
+    return fixes
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # iOS
