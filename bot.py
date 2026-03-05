@@ -55,6 +55,7 @@ allowlist = Allowlist()
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True  # needed for auto-approve (guild.get_member)
 client = discord.Client(intents=intents)
 
 
@@ -1315,6 +1316,105 @@ def _ios_deploy_info_embed() -> discord.Embed:
     return embed
 
 
+class _BuildAppModal(discord.ui.Modal, title="Build a new app"):
+    app_name = discord.ui.TextInput(
+        label="App name",
+        placeholder="e.g. WorkoutTracker",
+        required=True,
+        max_length=50,
+    )
+    description = discord.ui.TextInput(
+        label="Describe your app",
+        style=discord.TextStyle.long,
+        placeholder="e.g. a workout tracker with exercise categories, sets/reps logging, and a rest timer",
+        required=True,
+        max_length=500,
+    )
+
+    def __init__(self, channel, user_id, is_admin, prefill_desc=""):
+        super().__init__()
+        self.channel = channel
+        self.user_id = user_id
+        self.is_admin = is_admin
+        if prefill_desc:
+            self.description.default = prefill_desc
+            self.app_name.default = buildapp.infer_app_name(prefill_desc)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        name = self.app_name.value.strip()
+        desc = self.description.value.strip()
+        await interaction.response.send_message(
+            f"🚀 Building **{name}**...", ephemeral=True,
+        )
+
+        async def ba_status(msg, fpath=None):
+            await send(self.channel, msg, file_path=fpath)
+
+        async def ba_ask(question: str) -> str | None:
+            view = SkipDataInterviewView()
+            q_msg = await self.channel.send(question, view=view)
+            pair = (self.channel.id, self.user_id)
+            _interview_pending.add(pair)
+
+            def check(m: discord.Message) -> bool:
+                return (
+                    m.channel.id == self.channel.id
+                    and m.author.id == self.user_id
+                    and not m.content.startswith("/")
+                    and not m.content.startswith("@")
+                )
+
+            try:
+                wait_msg = asyncio.ensure_future(
+                    client.wait_for("message", check=check, timeout=120)
+                )
+                wait_skip = asyncio.ensure_future(view.wait())
+                done, pending = await asyncio.wait(
+                    {wait_msg, wait_skip}, return_when=asyncio.FIRST_COMPLETED
+                )
+                for t in pending:
+                    t.cancel()
+
+                if wait_msg in done:
+                    reply = wait_msg.result()
+                    view.stop()
+                    await q_msg.edit(view=None)
+                    return reply.content.strip() or None
+                await q_msg.edit(view=None)
+                return None
+            except asyncio.TimeoutError:
+                await q_msg.edit(view=None)
+                return None
+            finally:
+                _interview_pending.discard(pair)
+
+        slug = await buildapp.handle_buildapp(
+            desc, registry, claude, ba_status,
+            on_ask=ba_ask, is_admin=self.is_admin, owner_id=self.user_id,
+            app_name=name,
+        )
+        if slug:
+            registry.set_default(self.user_id, slug)
+            await send(self.channel, f"📂 Switched to **{slug}**")
+
+
+class _BuildAppView(discord.ui.View):
+    def __init__(self, channel, user_id, is_admin, prefill_desc=""):
+        super().__init__(timeout=300)
+        self.channel = channel
+        self.user_id = user_id
+        self.is_admin = is_admin
+        self.prefill_desc = prefill_desc
+
+    @discord.ui.button(label="Get started", style=discord.ButtonStyle.success, emoji="🚀")
+    async def get_started(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("Not your command.", ephemeral=True)
+        await interaction.response.send_modal(
+            _BuildAppModal(self.channel, self.user_id, self.is_admin, self.prefill_desc)
+        )
+
+
 class AddQueueTaskModal(discord.ui.Modal, title="Add a task"):
     """Modal popup with a text field for one queue task."""
 
@@ -1586,8 +1686,25 @@ async def on_message(message: discord.Message):
         return
 
     # ── Everything below: DM-only, allowed users ────────────────────────
-    if not is_dm or not is_allowed:
+    if not is_dm:
         return
+
+    # Auto-approve: if user shares a guild with the bot, add them automatically
+    if not is_allowed:
+        shares_guild = any(
+            guild.get_member(user_id) for guild in client.guilds
+        )
+        if shares_guild:
+            display = message.author.display_name
+            allowlist.add(user_id, display)
+            is_allowed = True
+            await send(
+                channel,
+                f"👋 Welcome **{display}**! You've been automatically approved.\n"
+                "Send `/help` to see what I can do.",
+            )
+        else:
+            return
 
     # ── Claude prompts ───────────────────────────────────────────────────
     if isinstance(parsed, (WorkspacePrompt, FallbackPrompt)):
@@ -1841,56 +1958,12 @@ async def on_message(message: discord.Message):
             if not config.AGENT_MODE:
                 await send(channel, "🔒 Agent mode OFF.")
             else:
-                async def ba_status(msg, fpath=None):
-                    await send(channel, msg, file_path=fpath)
-
-                async def ba_ask(question: str) -> str | None:
-                    """Ask the user a question during buildapp; return their reply or None on skip/timeout."""
-                    view = SkipDataInterviewView()
-                    q_msg = await channel.send(question, view=view)
-                    pair = (channel.id, user_id)
-                    _interview_pending.add(pair)
-
-                    def check(m: discord.Message) -> bool:
-                        return (
-                            m.channel.id == channel.id
-                            and m.author.id == user_id
-                            and not m.content.startswith("/")
-                            and not m.content.startswith("@")
-                        )
-
-                    try:
-                        wait_msg = asyncio.ensure_future(
-                            client.wait_for("message", check=check, timeout=120)
-                        )
-                        wait_skip = asyncio.ensure_future(view.wait())
-                        done, pending = await asyncio.wait(
-                            {wait_msg, wait_skip}, return_when=asyncio.FIRST_COMPLETED
-                        )
-                        for t in pending:
-                            t.cancel()
-
-                        if wait_msg in done:
-                            reply = wait_msg.result()
-                            view.stop()
-                            await q_msg.edit(view=None)
-                            return reply.content.strip() or None
-                        # Skip button pressed or timeout
-                        await q_msg.edit(view=None)
-                        return None
-                    except asyncio.TimeoutError:
-                        await q_msg.edit(view=None)
-                        return None
-                    finally:
-                        _interview_pending.discard(pair)
-
-                slug = await buildapp.handle_buildapp(
-                    cmd.raw_cmd or "", registry, claude, ba_status,
-                    on_ask=ba_ask, is_admin=is_admin, owner_id=user_id,
+                prefill = cmd.raw_cmd or ""
+                view = _BuildAppView(channel, user_id, is_admin, prefill)
+                await channel.send(
+                    "**Let's build an app!** Tap the button to get started.",
+                    view=view,
                 )
-                if slug:
-                    registry.set_default(user_id, slug)
-                    await send(channel, f"📂 Switched to **{slug}**")
 
         case "build":
             if not config.AGENT_MODE:
@@ -1911,7 +1984,14 @@ async def on_message(message: discord.Message):
 
         case "platform":
             if cmd.platform and cmd.platform in ("ios", "android") and not is_admin:
-                await send(channel, f"🔒 `/platform {cmd.platform}` is admin-only. Use `/platform web`.")
+                if cmd.platform == "ios":
+                    await send(channel,
+                        "🔒 `/platform ios` is admin-only. Use `/platform web`, "
+                        "or `/testflight` to publish to the iOS App Store for testing.")
+                else:
+                    await send(channel,
+                        "🔒 `/platform android` is admin-only. Use `/platform web`, "
+                        "or `/playstore` to publish to Google Play Store for testing.")
             elif cmd.platform and cmd.platform in ("ios", "android", "web"):
                 registry.set_platform(user_id, cmd.platform)
                 await send(channel, f"✅ Default demo platform set to **{cmd.platform}**.")
@@ -1933,7 +2013,14 @@ async def on_message(message: discord.Message):
                 elif not registry.can_access(ws_key, user_id, is_admin):
                     await send(channel, "You don't have access to that workspace.")
                 elif cmd.platform and cmd.platform in ("ios", "android") and not is_admin:
-                    await send(channel, f"🔒 `/demo {cmd.platform}` is admin-only. Use `/demo web` or `/testflight`.")
+                    if cmd.platform == "ios":
+                        await send(channel,
+                            "🔒 `/demo ios` is admin-only. Use `/demo web` to test in your browser, "
+                            "or `/testflight` to publish to the iOS App Store for testing.")
+                    else:
+                        await send(channel,
+                            "🔒 `/demo android` is admin-only. Use `/demo web` to test in your browser, "
+                            "or `/playstore` to publish to Google Play Store for testing.")
                 elif cmd.platform:
                     # /demo android, /demo ios, /demo web → run directly
                     prev = registry.get_platform(user_id)

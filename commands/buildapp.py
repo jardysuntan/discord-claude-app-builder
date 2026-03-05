@@ -47,6 +47,8 @@ Rules:
 - Add permissive RLS: ALTER TABLE <t> ENABLE ROW LEVEL SECURITY;
   CREATE POLICY "public_access" ON <t> FOR ALL USING (true) WITH CHECK (true);
   for every table.
+- ALL primary keys must be uuid. ALL foreign keys must also be uuid and reference
+  the uuid primary key. Never mix types (e.g. text FK → uuid PK).
 - Keep it minimal — only tables the app clearly needs.
 """
 
@@ -114,13 +116,15 @@ async def handle_buildapp(
     on_ask: Optional[Callable[[str], Awaitable[Optional[str]]]] = None,
     is_admin: bool = True,
     owner_id: Optional[int] = None,
+    app_name: Optional[str] = None,
 ) -> Optional[str]:
     if not description:
         await on_status("Usage: `/buildapp <description of the app>`", None)
         return None
 
     start_time = time.time()
-    app_name = infer_app_name(description)
+    if not app_name:
+        app_name = infer_app_name(description)
 
     # 1. Scaffold
     await on_status(f"🏗️ Creating **{app_name}** (Kotlin Multiplatform)...", None)

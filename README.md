@@ -98,6 +98,21 @@ Then rebuild to see the changes:
 
 ---
 
+## Join and start building
+
+Want to try the bot? Here's how to get access:
+
+1. **Get a Discord invite** — ask Jared (jared.e.tan@gmail.com / [@jardysuntan](https://github.com/jardysuntan)) for an invite link to the Discord server
+2. **Join the server** — click the link, create a Discord account if you don't have one
+3. **Find the bot** — look for **ClaudeAppBot** in the member list on the right side
+4. **Start a conversation** — click the bot's name → **Message**
+5. **Say hi** — send any message and you'll be automatically approved
+6. **Build your first app** — send `/buildapp a pomodoro timer` and wait a few minutes
+
+That's it — no setup, no coding, no installs. Everything happens through chat.
+
+---
+
 ## How it works
 
 You DM the bot something like `/buildapp a habit tracker with streaks`. Behind the scenes:
@@ -369,11 +384,12 @@ export TAILSCALE_HOSTNAME=100.x.x.x
 
 Everything needed before other people can use the bot:
 
+- [x] **Multi-user workspace isolation** — each user gets their own workspace directory
+- [x] **Per-user spend tracking** — budget and cost tracking scoped per user with daily caps
+- [x] **Auto-approve onboarding** — anyone in the Discord server is automatically approved on first DM
 - [ ] **Per-user GitHub tokens** — `/save github` currently uses the host machine's `gh` auth. Each user needs their own token, stored in config/DB and passed via env to `gh` calls (or a `/save github connect <token>` flow)
-- [ ] **Multi-user workspace isolation** — let multiple users build apps simultaneously (currently owner-only via `DISCORD_ALLOWED_USER_ID`)
 - [ ] **OAuth onboarding** — "click this link" flows for Supabase, Apple, Google, and Claude API so non-engineers don't have to copy-paste API keys
 - [ ] **LLM selection** — let users choose their LLM provider (with subscription info)
-- [ ] **Per-user spend tracking** — budget and cost tracking scoped per user, not global
 - [ ] **Per-user Claude sessions** — isolate Claude context so one user's prompts don't leak into another's
 
 ## Follow-ups
