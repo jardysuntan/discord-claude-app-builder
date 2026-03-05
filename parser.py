@@ -195,6 +195,8 @@ def parse(text: str) -> ParseResult:
                 return Command(name="setcap", raw_cmd=rest or None)
             case "/users":
                 return Command(name="users")
+            case "/invite":
+                return Command(name="invite", raw_cmd=rest or None)
 
             # ── Memory & system ──────────────────────────────────────
             case "/memory":

@@ -328,6 +328,47 @@ class CancelRequestView(discord.ui.View):
 STILL_LISTENING = "💡 *I'm still listening — feel free to send other commands while this runs.*"
 
 
+_INVITE_TEMPLATE_PATH = Path(__file__).parent / "templates" / "invite_email.md"
+
+
+async def _send_invite_email(to_email: str, invite_url: str, name: str = "") -> bool:
+    """Send an invite email with instructions on joining the bot."""
+    loop = asyncio.get_event_loop()
+
+    def _send():
+        import smtplib
+        from email.mime.text import MIMEText
+
+        smtp_user = config.GMAIL_ADDRESS
+        smtp_pass = config.GMAIL_APP_PASSWORD
+        if not smtp_user or not smtp_pass:
+            return False
+
+        try:
+            template = _INVITE_TEMPLATE_PATH.read_text()
+        except FileNotFoundError:
+            print("[invite] Template not found: templates/invite_email.md")
+            return False
+
+        body = template.format(name=name or "there", invite_url=invite_url)
+
+        msg = MIMEText(body, "plain")
+        msg["From"] = smtp_user
+        msg["To"] = to_email
+        msg["Subject"] = "You're invited to build apps with AI"
+
+        try:
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=60) as server:
+                server.login(smtp_user, smtp_pass)
+                server.sendmail(smtp_user, to_email, msg.as_string())
+            return True
+        except Exception as e:
+            print(f"[invite] Email send error: {e}")
+            return False
+
+    return await loop.run_in_executor(None, _send)
+
+
 async def _run_demo(channel, ws_key: str, ws_path: str, platform: str):
     """Run a demo for a single platform. Shared by /demo <plat> and DemoPlatformView."""
     await send(channel, f"📱 Demoing **{ws_key}** [{platform}]...")
@@ -1570,6 +1611,7 @@ def help_text(is_admin: bool = True):
             "`/disallow @user` — revoke access",
             "`/setcap @user <amount>` — set daily spend cap",
             "`/users` — list allowed users + spend",
+            "`/invite [name] <email>` — email someone an invite to the bot",
             "`/maintenance [msg|off]` — toggle maintenance",
             "`/announce <msg>` — post to announcement channel",
         ]
@@ -1691,7 +1733,8 @@ async def on_message(message: discord.Message):
 
     # Auto-approve: if user shares a guild with the bot, add them automatically
     if not is_allowed:
-        shares_guild = any(
+        # Try mutual_guilds first (works without members intent), fall back to get_member
+        shares_guild = bool(message.author.mutual_guilds) or any(
             guild.get_member(user_id) for guild in client.guilds
         )
         if shares_guild:
@@ -2334,6 +2377,46 @@ async def on_message(message: discord.Message):
                         f"${spent:.2f}/${cap:.2f} today, {tasks} tasks"
                     )
                 await send(channel, "\n".join(lines))
+
+        case "invite":
+            if not is_admin:
+                await send(channel, "🔒 Admin-only command.")
+                await send_workspace_footer(channel, user_id)
+                return
+            if not cmd.raw_cmd:
+                await send(channel, "Usage: `/invite someone@email.com` or `/invite Jamie someone@email.com`")
+            else:
+                parts = cmd.raw_cmd.strip().split()
+                # If first part isn't an email, treat it as a name
+                if len(parts) >= 2 and "@" not in parts[0]:
+                    invite_name = parts[0]
+                    to_email = parts[1]
+                else:
+                    invite_name = ""
+                    to_email = parts[0]
+                if "@" not in to_email or "." not in to_email:
+                    await send(channel, "That doesn't look like an email address.")
+                else:
+                    await send(channel, f"📧 Sending invite to `{to_email}`...")
+                    # Generate a server invite link (1 use, 7 day expiry)
+                    invite_url = None
+                    for guild in client.guilds:
+                        try:
+                            channels = [c for c in guild.text_channels if c.permissions_for(guild.me).create_instant_invite]
+                            if channels:
+                                inv = await channels[0].create_invite(max_uses=1, max_age=604800, unique=True)
+                                invite_url = str(inv)
+                                break
+                        except Exception:
+                            pass
+                    if not invite_url:
+                        await send(channel, "❌ Could not generate a server invite link. Make sure the bot has invite permissions.")
+                    else:
+                        ok = await _send_invite_email(to_email, invite_url, name=invite_name)
+                        if ok:
+                            await send(channel, f"✅ Invite sent to `{to_email}`!")
+                        else:
+                            await send(channel, "❌ Failed to send email. Check GMAIL_ADDRESS / GMAIL_APP_PASSWORD in `.env`.")
 
         case "run":
             if not config.AGENT_MODE:
