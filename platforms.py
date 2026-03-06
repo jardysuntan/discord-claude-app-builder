@@ -701,6 +701,7 @@ class iOSPlatform:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _web_server_proc: Optional[asyncio.subprocess.Process] = None
+_tunnel_proc: Optional[asyncio.subprocess.Process] = None
 
 
 class WebPlatform:
@@ -787,7 +788,7 @@ class WebPlatform:
     @staticmethod
     async def serve(workspace_path: str) -> Optional[str]:
         """Start a simple HTTP server for the built web app."""
-        global _web_server_proc
+        global _web_server_proc, _tunnel_proc
 
         # Stop existing server (ours + any orphan on the port)
         await WebPlatform.stop_server()
@@ -817,12 +818,72 @@ class WebPlatform:
         )
         await asyncio.sleep(1)
 
+        # Try to start a Cloudflare Tunnel for a public URL
+        public_url = await WebPlatform._start_tunnel()
+        if public_url:
+            return public_url
+
+        # Fallback to Tailscale / localhost
         host = config.TAILSCALE_HOSTNAME or "localhost"
         return f"http://{host}:{config.WEB_SERVE_PORT}"
 
     @staticmethod
+    async def _start_tunnel() -> Optional[str]:
+        """Start a cloudflared quick tunnel. Returns public URL or None."""
+        global _tunnel_proc
+        await WebPlatform._stop_tunnel()
+
+        import shutil
+        if not shutil.which("cloudflared"):
+            return None
+
+        _tunnel_proc = await asyncio.create_subprocess_exec(
+            "cloudflared", "tunnel", "--url", f"http://localhost:{config.WEB_SERVE_PORT}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        # cloudflared prints the public URL to stderr
+        # Wait up to 15 seconds for the URL to appear
+        url = None
+        import re as _re
+        try:
+            deadline = asyncio.get_event_loop().time() + 15
+            buffer = b""
+            while asyncio.get_event_loop().time() < deadline:
+                try:
+                    chunk = await asyncio.wait_for(_tunnel_proc.stderr.read(4096), timeout=2)
+                    if not chunk:
+                        break
+                    buffer += chunk
+                    m = _re.search(rb"https://[a-zA-Z0-9-]+\.trycloudflare\.com", buffer)
+                    if m:
+                        url = m.group(0).decode()
+                        break
+                except asyncio.TimeoutError:
+                    continue
+        except Exception:
+            pass
+
+        if not url:
+            await WebPlatform._stop_tunnel()
+        return url
+
+    @staticmethod
+    async def _stop_tunnel():
+        global _tunnel_proc
+        if _tunnel_proc and _tunnel_proc.returncode is None:
+            _tunnel_proc.terminate()
+            try:
+                await asyncio.wait_for(_tunnel_proc.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                _tunnel_proc.kill()
+            _tunnel_proc = None
+
+    @staticmethod
     async def stop_server():
         global _web_server_proc
+        await WebPlatform._stop_tunnel()
         if _web_server_proc and _web_server_proc.returncode is None:
             _web_server_proc.terminate()
             try:

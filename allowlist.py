@@ -49,15 +49,70 @@ class Allowlist:
     def is_admin(self, user_id: int) -> bool:
         return self._users.get(user_id, {}).get("role") == "admin"
 
-    def add(self, user_id: int, display_name: str, daily_cap_usd: Optional[float] = None):
+    def add(self, user_id: int, display_name: str, daily_cap_usd: Optional[float] = None, email: Optional[str] = None):
         if user_id in self._users:
-            return  # already exists
-        self._users[user_id] = {
+            # Link email if not set yet
+            if email and not self._users[user_id].get("email"):
+                self._users[user_id]["email"] = email
+                self._save()
+            return
+        entry = {
             "role": "user",
             "display_name": display_name,
             "daily_cap_usd": daily_cap_usd or config.DEFAULT_USER_DAILY_CAP_USD,
         }
+        if email:
+            entry["email"] = email
+        self._users[user_id] = entry
         self._save()
+
+    def set_email(self, user_id: int, email: str) -> bool:
+        if user_id not in self._users:
+            return False
+        self._users[user_id]["email"] = email
+        self._save()
+        return True
+
+    def get_email(self, user_id: int) -> Optional[str]:
+        entry = self._users.get(user_id)
+        return entry.get("email") if entry else None
+
+    def find_by_email(self, email: str) -> Optional[int]:
+        """Find user ID by email. Returns None if not found."""
+        for uid, info in self._users.items():
+            if info.get("email", "").lower() == email.lower():
+                return uid
+        return None
+
+    def add_pending_invite(self, email: str):
+        """Store an email for someone who hasn't joined Discord yet."""
+        # Store in a special key
+        pending = self._users.get(0, {}).get("pending_invites", [])
+        if email.lower() not in [p.lower() for p in pending]:
+            pending.append(email)
+            if 0 not in self._users:
+                self._users[0] = {"pending_invites": pending}
+            else:
+                self._users[0]["pending_invites"] = pending
+            self._save()
+
+    def claim_pending_invite(self, email: str) -> bool:
+        """Check if email was pre-invited. Returns True and removes from pending."""
+        pending = self._users.get(0, {}).get("pending_invites", [])
+        lower_pending = [p.lower() for p in pending]
+        if email.lower() in lower_pending:
+            idx = lower_pending.index(email.lower())
+            pending.pop(idx)
+            if pending:
+                self._users[0]["pending_invites"] = pending
+            else:
+                self._users.pop(0, None)
+            self._save()
+            return True
+        return False
+
+    def get_pending_invites(self) -> list[str]:
+        return self._users.get(0, {}).get("pending_invites", [])
 
     def remove(self, user_id: int) -> bool:
         """Remove a user. Returns False if they are the bootstrap admin."""

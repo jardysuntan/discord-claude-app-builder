@@ -197,6 +197,8 @@ def parse(text: str) -> ParseResult:
                 return Command(name="users")
             case "/invite":
                 return Command(name="invite", raw_cmd=rest or None)
+            case "/admin":
+                return Command(name="admin")
 
             # ── Memory & system ──────────────────────────────────────
             case "/memory":

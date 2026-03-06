@@ -9,6 +9,10 @@ venv/
 .env
 .env.bak
 
+# Keys / secrets
+keys/
+allowlist.json
+
 # Runtime state
 workspaces.json
 workspaces.json.bak
