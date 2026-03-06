@@ -69,7 +69,8 @@ def check_destructive(sql: str) -> list[str]:
 
 
 def patch_idempotent(sql: str) -> str:
-    """Add IF NOT EXISTS to CREATE TABLE/INDEX statements that lack it."""
+    """Add IF NOT EXISTS to CREATE TABLE/INDEX statements that lack it,
+    and make CREATE POLICY idempotent with DROP POLICY IF EXISTS."""
     sql = re.sub(
         r"\bCREATE\s+TABLE\b(?!\s+IF\s+NOT\s+EXISTS)",
         "CREATE TABLE IF NOT EXISTS",
@@ -85,6 +86,13 @@ def patch_idempotent(sql: str) -> str:
     sql = re.sub(
         r"\bCREATE\s+UNIQUE\s+INDEX\b(?!\s+IF\s+NOT\s+EXISTS)",
         "CREATE UNIQUE INDEX IF NOT EXISTS",
+        sql,
+        flags=re.IGNORECASE,
+    )
+    # CREATE POLICY has no IF NOT EXISTS — prepend DROP POLICY IF EXISTS
+    sql = re.sub(
+        r"\bCREATE\s+POLICY\s+\"([^\"]+)\"\s+ON\s+([^\s;]+)",
+        r'DROP POLICY IF EXISTS "\1" ON \2; CREATE POLICY "\1" ON \2',
         sql,
         flags=re.IGNORECASE,
     )
