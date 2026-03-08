@@ -34,12 +34,12 @@ class CreateResult:
 
 
 def _unique_name(app_name: str, base_dir: Path) -> str:
-    """If app_name dir already exists, append 2, 3, … until unique."""
-    if not (base_dir / app_name).exists():
+    """If slug dir already exists, append 2, 3, … until unique."""
+    if not (base_dir / slugify(app_name)).exists():
         return app_name
     for i in range(2, 100):
         candidate = f"{app_name}{i}"
-        if not (base_dir / candidate).exists():
+        if not (base_dir / slugify(candidate)).exists():
             return candidate
     return f"{app_name}{int(time.time())}"
 
@@ -61,7 +61,8 @@ async def create_kmp_project(app_name: str, registry: WorkspaceRegistry, owner_i
     app_name = _unique_name(app_name, base_dir)
     slug = slugify(app_name)
     new_pkg = f"{config.KMP_PACKAGE_PREFIX}.{slug}"
-    project_dir = base_dir / app_name
+    # Use slug for directory name (no spaces) — spaces break Kotlin/JS webpack
+    project_dir = base_dir / slug
     template_dir = Path(config.TEMPLATES_DIR) / "kmp" / "KmpTemplate"
 
     if template_dir.exists():
