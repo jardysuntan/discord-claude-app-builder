@@ -16,6 +16,37 @@ from agent_loop import run_agent_loop, format_loop_summary
 from commands.create import create_kmp_project
 from platforms import AndroidPlatform, iOSPlatform, WebPlatform
 from supabase_client import run_sql, extract_sql
+import glob
+import os
+
+
+def _patch_supabase_credentials(ws_path: str) -> int:
+    """Replace placeholder Supabase credentials in generated source files.
+    Returns the number of files patched."""
+    if not config.SUPABASE_PROJECT_REF or not config.SUPABASE_ANON_KEY:
+        return 0
+    real_url = f"https://{config.SUPABASE_PROJECT_REF}.supabase.co"
+    placeholders = {
+        "https://YOUR_PROJECT.supabase.co": real_url,
+        "YOUR_PROJECT.supabase.co": f"{config.SUPABASE_PROJECT_REF}.supabase.co",
+        "YOUR_ANON_KEY": config.SUPABASE_ANON_KEY,
+        "your-project-ref.supabase.co": f"{config.SUPABASE_PROJECT_REF}.supabase.co",
+        "https://your-project-ref.supabase.co": real_url,
+    }
+    patched = 0
+    for ext in ("*.kt", "*.swift", "*.ts", "*.js"):
+        for filepath in glob.glob(os.path.join(ws_path, "**", ext), recursive=True):
+            try:
+                content = open(filepath).read()
+                original = content
+                for placeholder, real in placeholders.items():
+                    content = content.replace(placeholder, real)
+                if content != original:
+                    open(filepath, "w").write(content)
+                    patched += 1
+            except Exception:
+                pass
+    return patched
 
 
 def infer_app_name(description: str) -> str:
@@ -84,6 +115,9 @@ The database has been provisioned. Connect to it using these details:
 
 - Supabase URL: {supabase_url}
 - Anon key: {config.SUPABASE_ANON_KEY}
+
+IMPORTANT: Use these EXACT values above in your code. Do NOT use placeholders
+like "YOUR_PROJECT" or "YOUR_ANON_KEY". The real credentials are provided above.
 
 Schema that was created:
 ```sql
@@ -173,6 +207,8 @@ async def handle_buildapp(
 
         if schema_sql:
             await on_status("🗄️ Creating Supabase tables...", None)
+            from supabase_client import patch_idempotent
+            schema_sql = patch_idempotent(schema_sql)
             ok, err = await run_sql(schema_sql)
             if ok:
                 await on_status("✅ Database ready.", None)
@@ -201,6 +237,12 @@ async def handle_buildapp(
 
     summary = format_loop_summary(loop_result)
     await on_status(summary, None)
+
+    # Patch any placeholder Supabase credentials Claude may have left
+    if schema_sql:
+        patched = _patch_supabase_credentials(ws_path)
+        if patched:
+            await on_status(f"🔑 Injected Supabase credentials into {patched} file(s).", None)
 
     if not loop_result.success:
         await on_status(
