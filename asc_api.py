@@ -104,11 +104,43 @@ async def find_app(bundle_id: str) -> Optional[str]:
     return items[0]["id"] if items else None
 
 
+async def _patch(path: str, body: dict) -> dict:
+    async with httpx.AsyncClient() as client:
+        r = await client.patch(f"{ASC_BASE}{path}", headers=_headers(),
+                               json=body, timeout=30)
+        if r.status_code >= 400:
+            detail = r.json().get("errors", [{}])[0].get("detail", r.text[:300])
+            raise RuntimeError(f"ASC API error ({r.status_code}): {detail}")
+        return r.json()
+
+
+async def update_app_name(bundle_id: str, new_name: str) -> str:
+    """Rename an app in App Store Connect. Returns the new name on success."""
+    app_id = await find_app(bundle_id)
+    if not app_id:
+        raise RuntimeError(f"No app found for bundle ID `{bundle_id}`")
+    # Get the appInfoLocalization ID for en-US
+    data = await _get(f"/apps/{app_id}/appInfos")
+    info_id = data["data"][0]["id"]
+    loc_data = await _get(f"/appInfos/{info_id}/appInfoLocalizations",
+                          {"filter[locale]": "en-US"})
+    loc_id = loc_data["data"][0]["id"]
+    # Patch the name
+    await _patch(f"/appInfoLocalizations/{loc_id}", {
+        "data": {
+            "type": "appInfoLocalizations",
+            "id": loc_id,
+            "attributes": {"name": new_name},
+        }
+    })
+    return new_name
+
 
 async def ensure_app(bundle_id: str, workspace_key: str) -> tuple[bool, str]:
     """
     Ensure the bundle ID is registered and an app record exists.
     Returns (success, message).
+    Note: Apple does not allow creating app records via API — only via the web UI.
     """
     app_name = workspace_key.replace("-", " ").replace("_", " ").title()
 
@@ -118,16 +150,10 @@ async def ensure_app(bundle_id: str, workspace_key: str) -> tuple[bool, str]:
         if not asc_bundle_id:
             asc_bundle_id = await register_bundle_id(bundle_id, app_name)
 
-        # Step 2: Check if app record exists (Apple doesn't allow creating apps via API)
+        # Step 2: Check if app record exists
         app_id = await find_app(bundle_id)
         if not app_id:
-            return False, (
-                f"❌ No app record for `{bundle_id}` in App Store Connect.\n"
-                "Create it once (takes 30 seconds):\n"
-                "1. Go to https://appstoreconnect.apple.com/apps → **+** → **New App**\n"
-                f"2. Name: **{app_name}**, Bundle ID: **{bundle_id}**, SKU: anything\n"
-                "3. Then re-run `/testflight`"
-            )
+            return False, f"No app record for `{bundle_id}` in App Store Connect."
 
         return True, f"App `{bundle_id}` found in App Store Connect."
 

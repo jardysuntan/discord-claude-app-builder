@@ -125,6 +125,13 @@ async def create_kmp_project(app_name: str, registry: WorkspaceRegistry, owner_i
         f"**Safe for shared Compose:** buttons, lists, forms, cards, text, images,\n"
         f"icons, dialogs, bottom sheets, tabs, top bars, snackbars, progress indicators,\n"
         f"lazy lists/grids, basic animations, theming, navigation (Android).\n\n"
+        f"## Supabase\n"
+        f"- Schema and seed data live in `supabase/schema.sql` and `supabase/seed.sql`\n"
+        f"- **To run SQL against the live database**, use: `python /Users/jaredtanpersonal/bots/discord-claude-bridge/run_supabase_sql.py \"<SQL>\"`\n"
+        f"- Always update BOTH the local SQL files AND run the SQL against the live database\n"
+        f"- For schema changes: edit `schema.sql` AND run `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` via the script\n"
+        f"- For data changes: edit `seed.sql` AND run the `UPDATE`/`INSERT` via the script\n"
+        f"- **Never tell users to go to the Supabase dashboard or run SQL manually** — do it directly\n\n"
         f"## Decisions\n"
         f"(Claude will append notes here)\n"
     )

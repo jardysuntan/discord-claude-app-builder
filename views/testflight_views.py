@@ -15,8 +15,58 @@ if TYPE_CHECKING:
     from bot_context import BotContext
 
 
+class _RenameAndRetryModal(discord.ui.Modal, title="Set app name & retry"):
+    """Modal to rename the app everywhere and retry /testflight."""
+
+    name_input = discord.ui.TextInput(
+        label="App name (must match what's in App Store Connect)",
+        placeholder="e.g. Golf Leaderboard Pro",
+        required=True,
+        max_length=50,
+    )
+
+    def __init__(self, parent_view: TestFlightSetupView):
+        super().__init__()
+        self.parent_view = parent_view
+        self.name_input.default = parent_view.app_name
+
+    async def on_submit(self, interaction: discord.Interaction):
+        new_name = self.name_input.value.strip()
+        if not new_name:
+            return await interaction.response.send_message("Name can't be empty.", ephemeral=True)
+
+        await interaction.response.edit_message(view=None)
+        ch = interaction.channel
+        pv = self.parent_view
+
+        # Rename workspace + files to match the name used in ASC
+        from handlers.publish_commands import _rename_app_in_workspace
+        new_key = new_name.lower().replace(" ", "-")
+        if new_key != pv.ws_key:
+            if not pv.ctx.registry.get_path(new_key):
+                pv.ctx.registry.rename(pv.ws_key, new_key)
+                pv.ws_key = new_key
+        _rename_app_in_workspace(pv.ws_path, new_name)
+        pv.app_name = new_name
+
+        await pv.ctx.send(ch, f"Renamed to **{new_name}** — retrying TestFlight...")
+
+        async def tf_status(msg, fpath=None):
+            await pv.ctx.send(ch, msg, file_path=fpath)
+        result = await handle_testflight(pv.ws_key, pv.ws_path, on_status=tf_status)
+        if result and result.needs_setup:
+            embed, view = _testflight_setup_embed(
+                pv.ctx, pv.owner_id, pv.ws_key, pv.ws_path,
+                pv.app_name, result.bundle_id,
+            )
+            await ch.send(embed=embed, view=view)
+        elif result and result.success:
+            from views.testflight_views import _testflight_success_embed
+            await ch.send(embed=_testflight_success_embed(pv.ws_key, result.bundle_id))
+
+
 class TestFlightSetupView(discord.ui.View):
-    """Prompt to create app in App Store Connect, then retry /testflight."""
+    """Shown when no app record exists — lets user rename or retry after admin creates it."""
 
     def __init__(self, ctx: BotContext, owner_id: int, ws_key: str, ws_path: str,
                  app_name: str, bundle_id: str):
@@ -27,15 +77,14 @@ class TestFlightSetupView(discord.ui.View):
         self.ws_path = ws_path
         self.app_name = app_name
         self.bundle_id = bundle_id
-        # Link button to App Store Connect (link buttons don't need a callback)
-        self.add_item(discord.ui.Button(
-            label="Open App Store Connect",
-            style=discord.ButtonStyle.link,
-            url="https://appstoreconnect.apple.com/apps",
-            emoji="\U0001f517",
-        ))
 
-    @discord.ui.button(label="Retry /testflight", style=discord.ButtonStyle.success, emoji="\U0001f680")
+    @discord.ui.button(label="Change Name & Retry", style=discord.ButtonStyle.primary, emoji="\u270f\ufe0f")
+    async def change_name(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.owner_id:
+            return await interaction.response.send_message("Not your command.", ephemeral=True)
+        await interaction.response.send_modal(_RenameAndRetryModal(self))
+
+    @discord.ui.button(label="Retry", style=discord.ButtonStyle.secondary, emoji="\U0001f504")
     async def retry(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.owner_id:
             return await interaction.response.send_message("Not your command.", ephemeral=True)
@@ -51,6 +100,8 @@ class TestFlightSetupView(discord.ui.View):
                 result.app_name, result.bundle_id,
             )
             await ch.send(embed=embed, view=view)
+        elif result and result.success:
+            await ch.send(embed=_testflight_success_embed(self.ws_key, result.bundle_id))
 
     async def on_timeout(self):
         try:
@@ -60,45 +111,58 @@ class TestFlightSetupView(discord.ui.View):
             pass
 
 
+async def _notify_admin(ctx: BotContext, requester_id: int, app_name: str, bundle_id: str):
+    """DM the admin to create the app in App Store Connect."""
+    import config
+    admin_id = config.DISCORD_ALLOWED_USER_ID
+    if requester_id == admin_id:
+        return  # admin is the requester, no need to notify themselves
+    try:
+        admin = await ctx.client.fetch_user(admin_id)
+        if admin:
+            await admin.send(
+                f"\U0001f4f2 **App creation needed**\n\n"
+                f"<@{requester_id}> is trying to upload **{app_name}** to TestFlight "
+                f"but it doesn't exist in App Store Connect yet.\n\n"
+                f"**Create it here:** https://appstoreconnect.apple.com/apps\n"
+                f"1. Click **\uff0b** \u2192 **New App**\n"
+                f"2. **Name:** `{app_name}`\n"
+                f"3. **Bundle ID:** select `{bundle_id}`\n"
+                f"4. **SKU:** `{bundle_id}`\n\n"
+                f"Once created, they can tap **Retry** in the channel."
+            )
+    except Exception:
+        pass  # don't block the flow if DM fails
+
+
 def _testflight_setup_embed(ctx: BotContext, owner_id, ws_key, ws_path, app_name, bundle_id):
-    """Build the embed + view for TestFlight app setup."""
+    """Build the embed + view for when no app record exists."""
+    is_admin = (owner_id == ctx.client.user.id) if ctx.client.user else False
+    import config
+    is_admin = owner_id == config.DISCORD_ALLOWED_USER_ID
+
+    if is_admin:
+        description = (
+            f"No app record found for **{app_name}** (`{bundle_id}`).\n\n"
+            "Create it in "
+            "[App Store Connect](https://appstoreconnect.apple.com/apps):\n"
+            f"1. Click **\uff0b** \u2192 **New App**\n"
+            f"2. **Name:** `{app_name}`\n"
+            f"3. **Bundle ID:** select `{bundle_id}`\n"
+            f"4. **SKU:** `{bundle_id}`\n\n"
+            "Then tap **Retry** below."
+        )
+    else:
+        description = (
+            f"**{app_name}** needs to be registered with Apple before uploading.\n\n"
+            "The admin has been notified and will set it up shortly.\n"
+            "Tap **Retry** once they confirm it's done."
+        )
+
     embed = discord.Embed(
-        title="\U0001f4f2 One-time App Store Connect setup",
-        description=(
-            "Apple requires creating the app record on their website.\n"
-            "This only needs to be done **once per app** \u2014 takes about 30 seconds.\n\n"
-            "\U0001f4a1 *Right-click the link below \u2192 **Open in Browser** "
-            "(Discord's built-in browser can be flaky).*"
-        ),
-        color=0x0A84FF,  # iOS blue
-    )
-    embed.add_field(
-        name="Step 1",
-        value='Click **Open App Store Connect** below, then tap **\uff0b** \u2192 **New App**',
-        inline=False,
-    )
-    embed.add_field(
-        name="Step 2",
-        value=(
-            f"**Name:** `{app_name}` *(common names are often taken \u2014 "
-            "try something like \"{app_name} App\" or \"{app_name} by You\". "
-            "It's just a display label, you can change it anytime)*\n"
-            f"**Bundle ID:** select `{bundle_id}`\n"
-            f"**SKU:** `{bundle_id}`\n"
-            "**Access:** Full Access"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Step 3",
-        value=(
-            "Click **Create**, then come back here and tap **Retry**.\n\n"
-            "\u26a0\ufe0f **Do NOT click \"Add for Review\"** \u2014 that submits to the public App Store "
-            "under Jared's developer account. For now, just use TestFlight for testing. "
-            "App Store submission will be available later once we add app readiness checks "
-            "and support for your own Apple Developer account."
-        ),
-        inline=False,
+        title="\U0001f4f2 One-time setup needed",
+        description=description,
+        color=0xFF9500,  # orange/warning
     )
     view = TestFlightSetupView(ctx, owner_id, ws_key, ws_path, app_name, bundle_id)
     return embed, view

@@ -1,6 +1,6 @@
 """
 handlers/workspace_commands.py — Workspace management commands
-(help, ls, use, where, create, deleteapp, rename).
+(help, ls, use, where, create, deleteapp).
 
 Extracted from bot.py lines 1908-2000.
 """
@@ -105,24 +105,6 @@ async def handle_deleteapp(ctx: BotContext, cmd: Command, channel, user_id: int,
             )
 
 
-async def handle_rename(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
-    if not cmd.workspace or not cmd.arg:
-        await ctx.send(channel, "Usage: `/rename <old-name> <new-name>`")
-    else:
-        old_key = cmd.workspace.lower()
-        new_key = cmd.arg.lower()
-        if not ctx.registry.get_path(old_key):
-            await ctx.send(channel, f"❌ Workspace `{old_key}` not found.")
-        elif not ctx.registry.can_access(old_key, user_id, is_admin):
-            await ctx.send(channel, "You don't have access to that workspace.")
-        elif ctx.registry.get_path(new_key):
-            await ctx.send(channel, f"❌ `{new_key}` already exists.")
-        elif ctx.registry.rename(old_key, new_key):
-            await ctx.send(channel, f"Renamed **{old_key}** → **{new_key}**")
-        else:
-            await ctx.send(channel, f"❌ Could not rename `{old_key}`.")
-
-
 HANDLERS = {
     "help": handle_help,
     "ls": handle_ls,
@@ -130,5 +112,4 @@ HANDLERS = {
     "where": handle_where,
     "create": handle_create,
     "deleteapp": handle_deleteapp,
-    "rename": handle_rename,
 }

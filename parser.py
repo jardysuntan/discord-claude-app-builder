@@ -96,10 +96,7 @@ def parse(text: str) -> ParseResult:
                 return Command(name="deleteapp", workspace=rest.lower() if rest else None)
 
             case "/rename":
-                rename_parts = rest.split(None, 1) if rest else []
-                return Command(name="rename", raw_cmd=rest or None,
-                               workspace=rename_parts[0].lower() if rename_parts else None,
-                               arg=rename_parts[1].lower() if len(rename_parts) > 1 else None)
+                return Command(name="rename", raw_cmd=rest)
 
             case "/platform":
                 return Command(name="platform", platform=rest.strip().lower() if rest else None)
@@ -117,6 +114,9 @@ def parse(text: str) -> ParseResult:
 
             case "/playstore":
                 return Command(name="playstore")
+
+            case "/appname":
+                return Command(name="appname", raw_cmd=rest)
 
             case "/vid" | "/viddemo":
                 return Command(name="vid", platform="android")
