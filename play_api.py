@@ -84,6 +84,7 @@ async def upload_aab(package_name: str, aab_path: str, key_path=None) -> tuple[b
 
             # Assign to internal testing track and commit
             # Try "completed" first; if app is still draft, retry with "draft" status
+            committed_status = None
             for status in ("completed", "draft"):
                 # Re-create edit if retrying (previous edit may be tainted)
                 if status == "draft":
@@ -113,12 +114,20 @@ async def upload_aab(package_name: str, aab_path: str, key_path=None) -> tuple[b
                     service.edits().commit(
                         packageName=package_name, editId=edit_id,
                     ).execute()
+                    committed_status = status
                     break  # success
                 except Exception as e:
                     if "draft" in str(e).lower() and status == "completed":
                         continue  # retry with draft
                     raise
 
+            if committed_status == "draft":
+                return True, (
+                    f"Uploaded version code `{version_code}` as **draft**.\n"
+                    "⚠️ Your app requires manual rollout in Play Console:\n"
+                    "Go to **Internal testing → Releases → Review and roll out**.\n"
+                    "Once the app is fully set up, future uploads will auto-roll out."
+                ), version_code
             return True, f"Uploaded version code `{version_code}` to internal testing.", version_code
 
         except Exception as e:

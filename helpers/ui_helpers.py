@@ -86,6 +86,7 @@ def help_text(is_admin: bool = True):
             "`/setcap @user <amount>` — set daily spend cap",
             "`/admin` — list allowed users, emails, spend, pending invites",
             "`/invite [name] <email>` — email someone an invite to the bot",
+            "`/collaborate <ws> <name> <email>` — invite collaborator to a workspace",
             "`/maintenance [msg|off]` — toggle maintenance",
             "`/announce <msg>` — post to announcement channel",
         ]
@@ -103,7 +104,8 @@ async def send_workspace_footer(ctx, channel, user_id: int, selector_view=None, 
         if selector_view is not None:
             selector_view.footer_message = msg
     else:
-        keys = ctx.registry.list_keys(owner_id=None if is_admin else user_id)
+        user_email = ctx.allowlist.get_email(user_id) if not is_admin else None
+        keys = ctx.registry.list_keys(owner_id=None if is_admin else user_id, user_email=user_email)
         if keys:
             view = WorkspaceSelectorView(ctx, user_id, keys)
             await channel.send("📂 No workspace set — pick one:", view=view)

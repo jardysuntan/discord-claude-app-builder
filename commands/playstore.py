@@ -122,14 +122,15 @@ async def handle_playstore(
 
     app_name = workspace_key.replace("-", " ").replace("_", " ").title()
 
-    # Step 3: Set versionCode to current timestamp
+    # Step 3: Set versionCode to current timestamp + bump versionName
     version_code = int(time.time())
     AndroidPlatform.set_version_code(workspace_path, version_code)
+    version_name = AndroidPlatform.bump_version_name(workspace_path) or "1.0"
 
     await on_status(
         f"Configuring **{workspace_key}** for Play Store...\n"
         f"  Package: `{package_name}`\n"
-        f"  Version code: `{version_code}`",
+        f"  Version: `{version_name}` (code: `{version_code}`)",
         None,
     )
 
@@ -203,17 +204,21 @@ async def handle_playstore(
     mins, secs = divmod(elapsed, 60)
 
     if upload_ok:
+        is_draft = "draft" in upload_msg.lower()
         await on_status(
             f"✅ **{workspace_key}** uploaded to Google Play!\n"
             f"  Package: `{package_name}` · Version: `{version_code}` · Time: {mins}m {secs}s",
             None,
         )
-        # Step 10: Poll for processing in background
-        async def _notify_ready(msg):
-            await on_status(msg, None)
-        asyncio.create_task(poll_processing(
-            package_name, version_code, on_ready=_notify_ready, key_path=resolved_key,
-        ))
+        if is_draft:
+            await on_status(upload_msg, None)
+        else:
+            # Step 10: Poll for processing in background (only for completed releases)
+            async def _notify_ready(msg):
+                await on_status(msg, None)
+            asyncio.create_task(poll_processing(
+                package_name, version_code, on_ready=_notify_ready, key_path=resolved_key,
+            ))
         return PlayStoreResult(success=True, version_code=uploaded_vc or version_code)
     else:
         is_first = "not found" in upload_msg.lower() or "Package not found" in upload_msg

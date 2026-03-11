@@ -63,19 +63,43 @@ class WorkspaceRegistry:
             self._save()
         return result
 
-    def list_keys(self, owner_id: Optional[int] = None) -> list[str]:
-        """List workspace keys. If owner_id given, filter to that user's workspaces."""
+    def list_keys(self, owner_id: Optional[int] = None, user_email: Optional[str] = None) -> list[str]:
+        """List workspace keys. If owner_id given, filter to that user's owned + collaborating workspaces."""
         if owner_id is None:
             return sorted(self._workspaces.keys())
-        return sorted(
-            k for k, v in self._workspaces.items()
-            if v.get("owner_id") == owner_id
-        )
+        result = []
+        for k, v in self._workspaces.items():
+            if v.get("owner_id") == owner_id:
+                result.append(k)
+                continue
+            # Check if user is a collaborator (by user_id or email)
+            for c in v.get("collaborators", []):
+                if c.get("user_id") == owner_id:
+                    result.append(k)
+                    break
+                if user_email and c.get("email", "").lower() == user_email.lower():
+                    result.append(k)
+                    break
+        return sorted(result)
 
-    def can_access(self, key: str, user_id: int, is_admin: bool) -> bool:
-        """Check if user can access a workspace. Admin can access all."""
+    def can_access(self, key: str, user_id: int, is_admin: bool, user_email: Optional[str] = None) -> bool:
+        """Check if user can access a workspace. Admin can access all. Collaborators can access."""
         if is_admin:
             return True
+        entry = self._workspaces.get(key.lower())
+        if not entry:
+            return False
+        if entry.get("owner_id") == user_id:
+            return True
+        for c in entry.get("collaborators", []):
+            if c.get("user_id") == user_id:
+                return True
+            if user_email and c.get("email", "").lower() == user_email.lower():
+                return True
+        return False
+
+    def is_owner(self, key: str, user_id: int) -> bool:
+        """Strict owner check — collaborators do not pass."""
         entry = self._workspaces.get(key.lower())
         if not entry:
             return False
@@ -84,6 +108,35 @@ class WorkspaceRegistry:
     def get_owner(self, key: str) -> Optional[int]:
         entry = self._workspaces.get(key.lower())
         return entry.get("owner_id") if entry else None
+
+    def add_collaborator(self, key: str, name: str, email: str, user_id: Optional[int] = None):
+        entry = self._workspaces.get(key.lower())
+        if not entry:
+            return
+        collabs = entry.setdefault("collaborators", [])
+        # Don't duplicate by email
+        for c in collabs:
+            if c.get("email", "").lower() == email.lower():
+                if user_id and not c.get("user_id"):
+                    c["user_id"] = user_id
+                    self._save()
+                return
+        collabs.append({"name": name, "email": email, "user_id": user_id})
+        self._save()
+
+    def remove_collaborator(self, key: str, email: str):
+        entry = self._workspaces.get(key.lower())
+        if not entry:
+            return
+        collabs = entry.get("collaborators", [])
+        entry["collaborators"] = [c for c in collabs if c.get("email", "").lower() != email.lower()]
+        self._save()
+
+    def get_collaborators(self, key: str) -> list[dict]:
+        entry = self._workspaces.get(key.lower())
+        if not entry:
+            return []
+        return entry.get("collaborators", [])
 
     def get_path(self, key: str) -> Optional[str]:
         entry = self._workspaces.get(key.lower())

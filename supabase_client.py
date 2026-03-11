@@ -96,6 +96,34 @@ def patch_idempotent(sql: str) -> str:
         sql,
         flags=re.IGNORECASE,
     )
+    # Make INSERT idempotent — add ON CONFLICT DO NOTHING if not already present
+    def _patch_insert(m):
+        stmt = m.group(0)
+        if re.search(r"ON\s+CONFLICT", stmt, re.IGNORECASE):
+            return stmt
+        return stmt.rstrip().rstrip(";") + " ON CONFLICT DO NOTHING;"
+    sql = re.sub(
+        r"\bINSERT\s+INTO\s+.*?;",
+        _patch_insert,
+        sql,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    # ALTER PUBLICATION ADD TABLE — strip invalid IF NOT EXISTS, wrap in DO block
+    def _patch_alter_pub(m):
+        stmt = m.group(0)
+        # Remove invalid IF NOT EXISTS
+        cleaned = re.sub(r"\s+IF\s+NOT\s+EXISTS", "", stmt, flags=re.IGNORECASE)
+        cleaned = cleaned.rstrip().rstrip(";")
+        return (
+            f"DO $$ BEGIN {cleaned}; "
+            f"EXCEPTION WHEN duplicate_object THEN NULL; END $$;"
+        )
+    sql = re.sub(
+        r"\bALTER\s+PUBLICATION\s+\S+\s+ADD\s+TABLE\s+.*?;",
+        _patch_alter_pub,
+        sql,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
     return sql
 
 

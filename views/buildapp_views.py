@@ -30,7 +30,7 @@ class _BuildAppModal(discord.ui.Modal, title="Build a new app"):
         style=discord.TextStyle.long,
         placeholder="e.g. a workout tracker with exercise categories, sets/reps logging, and a rest timer",
         required=True,
-        max_length=500,
+        max_length=4000,
     )
 
     def __init__(self, ctx: BotContext, channel, user_id, is_admin, prefill_desc=""):
@@ -40,7 +40,7 @@ class _BuildAppModal(discord.ui.Modal, title="Build a new app"):
         self.user_id = user_id
         self.is_admin = is_admin
         if prefill_desc:
-            self.description.default = prefill_desc
+            self.description.default = prefill_desc[:4000]
             self.app_name.default = buildapp.infer_app_name(prefill_desc)
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -114,6 +114,13 @@ class _BuildAppView(discord.ui.View):
     async def get_started(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
             return await interaction.response.send_message("Not your command.", ephemeral=True)
-        await interaction.response.send_modal(
-            _BuildAppModal(self.ctx, self.channel, self.user_id, self.is_admin, self.prefill_desc)
-        )
+        try:
+            await interaction.response.send_modal(
+                _BuildAppModal(self.ctx, self.channel, self.user_id, self.is_admin, self.prefill_desc)
+            )
+        except discord.HTTPException:
+            await interaction.response.send_message(
+                "\u26a0\ufe0f Description too long for the form. "
+                "Try `/build app` with a shorter description, or paste it directly as a message after creating the app.",
+                ephemeral=True,
+            )

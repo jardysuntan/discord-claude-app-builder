@@ -54,7 +54,7 @@ async def handle_prompt(
         return await ctx.send(channel, "❌ No workspace set. Use `/use <ws>` or `@ws`.")
     if not ws_path:
         return await ctx.send(channel, f"❌ Workspace `{ws_key}` not found.")
-    if not ctx.registry.can_access(ws_key, user_id, is_admin):
+    if not ctx.registry.can_access(ws_key, user_id, is_admin, user_email=ctx.allowlist.get_email(user_id)):
         return await ctx.send(channel, "You don't have access to that workspace.")
 
     # Cost gating

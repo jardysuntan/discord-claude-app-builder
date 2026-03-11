@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 import config
 from commands import run_cmd
+from helpers.collaborate_email import send_collaborate_email
 from helpers.invite_email import send_invite_email
 from helpers.ui_helpers import send_workspace_footer
 
@@ -203,6 +204,106 @@ async def handle_invite(ctx: BotContext, cmd: Command, channel, user_id: int, is
                     )
 
 
+async def handle_collaborate(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
+    if not is_admin:
+        await ctx.send(channel, "\U0001f512 Admin-only command.")
+        await send_workspace_footer(ctx, channel, user_id, is_admin=is_admin)
+        return
+    if not cmd.raw_cmd:
+        await ctx.send(channel, "Usage: `/collaborate <workspace> <name> <email>`")
+        return
+
+    parts = cmd.raw_cmd.strip().split()
+    if len(parts) < 3:
+        await ctx.send(channel, "Usage: `/collaborate <workspace> <name> <email>`")
+        return
+
+    ws_key = parts[0].lower()
+    collab_name = parts[1]
+    collab_email = parts[2]
+
+    if not ctx.registry.exists(ws_key):
+        await ctx.send(channel, f"\u274c Unknown workspace: `{ws_key}`")
+        return
+
+    if "@" not in collab_email or "." not in collab_email:
+        await ctx.send(channel, "That doesn't look like an email address.")
+        return
+
+    # Check if already a collaborator
+    existing = ctx.registry.get_collaborators(ws_key)
+    if any(c.get("email", "").lower() == collab_email.lower() for c in existing):
+        await ctx.send(channel, f"**{collab_name}** is already a collaborator on `{ws_key}`.")
+        return
+
+    # Check if user is already on Discord
+    existing_uid = ctx.allowlist.find_by_email(collab_email)
+    app_name = ws_key.replace("-", " ").replace("_", " ").title()
+
+    admin_display = ctx.allowlist.get_display_name(user_id) or "The admin"
+
+    if existing_uid:
+        # Already on Discord — add with user_id, DM them
+        ctx.registry.add_collaborator(ws_key, collab_name, collab_email, user_id=existing_uid)
+        try:
+            target_user = await ctx.client.fetch_user(existing_uid)
+            await target_user.send(
+                f"**{admin_display}** invited you to collaborate on **{app_name}**! "
+                f"Send `@{ws_key} hello` to get started."
+            )
+        except Exception:
+            pass
+        await ctx.send(
+            channel,
+            f"\u2705 **{collab_name}** added as collaborator on `{ws_key}` (already on Discord).",
+        )
+    else:
+        # Not on Discord — generate invite, send email
+        await ctx.send(channel, f"\U0001f4e7 Sending collaboration invite to `{collab_email}`...")
+        invite_url = None
+        for guild in ctx.client.guilds:
+            try:
+                channels = [
+                    c for c in guild.text_channels
+                    if c.permissions_for(guild.me).create_instant_invite
+                ]
+                if channels:
+                    inv = await channels[0].create_invite(
+                        max_uses=1, max_age=604800, unique=True,
+                    )
+                    invite_url = str(inv)
+                    break
+            except Exception:
+                pass
+
+        if not invite_url:
+            await ctx.send(
+                channel,
+                "\u274c Could not generate a server invite link. "
+                "Make sure the bot has invite permissions.",
+            )
+            return
+
+        ok = await send_collaborate_email(
+            to_email=collab_email,
+            invite_url=invite_url,
+            name=collab_name,
+            app_name=app_name,
+            admin_name=admin_display,
+            workspace_key=ws_key,
+        )
+        if ok:
+            # Add to allowlist so they can use the bot when they join
+            ctx.allowlist.add_pending_invite(collab_email)
+            ctx.registry.add_collaborator(ws_key, collab_name, collab_email, user_id=None)
+            await ctx.send(channel, f"\u2705 Collaboration invite sent to `{collab_email}` for `{ws_key}`!")
+        else:
+            await ctx.send(
+                channel,
+                "\u274c Failed to send email. Check GMAIL_ADDRESS / GMAIL_APP_PASSWORD in `.env`.",
+            )
+
+
 async def handle_run(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
     if not config.AGENT_MODE:
         await ctx.send(channel, "🔒 Agent mode OFF.")
@@ -236,6 +337,7 @@ HANDLERS = {
     "users": handle_users_admin,
     "admin": handle_users_admin,
     "invite": handle_invite,
+    "collaborate": handle_collaborate,
     "run": handle_run,
     "runsh": handle_runsh,
 }

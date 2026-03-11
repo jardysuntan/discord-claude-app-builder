@@ -245,6 +245,35 @@ class AndroidPlatform:
         return True
 
     @staticmethod
+    def bump_version_name(workspace_path: str) -> str | None:
+        """Increment versionName (e.g. "1.0" → "1.1"). Returns new version or None."""
+        gradle = AndroidPlatform._find_gradle_file(workspace_path)
+        if not gradle:
+            return None
+        text = gradle.read_text()
+        m = re.search(r'versionName\s*=?\s*"([^"]+)"', text)
+        if m:
+            old = m.group(1)
+            # Parse "X.Y" and increment Y
+            parts = old.rsplit(".", 1)
+            if len(parts) == 2 and parts[1].isdigit():
+                new_name = f"{parts[0]}.{int(parts[1]) + 1}"
+            else:
+                new_name = f"{old}.1"
+            new_text = text.replace(m.group(0), f'versionName = "{new_name}"')
+            gradle.write_text(new_text)
+            return new_name
+        else:
+            # No versionName — inject after versionCode
+            new_text = re.sub(
+                r'(versionCode\s*=?\s*\d+)',
+                r'\1\n            versionName = "1.0"',
+                text,
+            )
+            gradle.write_text(new_text)
+            return "1.0"
+
+    @staticmethod
     def inject_signing_config(workspace_path: str, ks_path: str, alias: str,
                               store_pw: str, key_pw: str) -> bool:
         """Inject signingConfigs block and wire it to release buildType. Skip if already present."""
@@ -737,12 +766,29 @@ class WebPlatform:
 
     @staticmethod
     def _find_dist_dir(workspace_path: str) -> Optional[Path]:
-        """Find the built web distribution directory, generating index.html if needed."""
+        """Find the built web distribution directory, generating index.html if needed.
+
+        Checks standard locations first, then looks for a custom build dir
+        (e.g. Claude may redirect builds to /tmp/ to work around path issues).
+        """
         candidates = [
             Path(workspace_path) / "composeApp" / "build" / "dist" / "wasmJs" / "productionExecutable",
             Path(workspace_path) / "composeApp" / "build" / "dist" / "js" / "productionExecutable",
             Path(workspace_path) / "composeApp" / "build" / "distributions",
         ]
+        # Check if build.gradle.kts redirects build dir to a custom location
+        root_gradle = Path(workspace_path) / "build.gradle.kts"
+        if root_gradle.exists():
+            import re as _re
+            text = root_gradle.read_text()
+            m = _re.search(r'java\.io\.tmpdir.*?["\']([^"\']+)["\']', text)
+            if m:
+                import tempfile
+                tmp_base = Path(tempfile.gettempdir()) / m.group(1)
+                candidates.extend([
+                    tmp_base / "composeApp" / "dist" / "wasmJs" / "productionExecutable",
+                    tmp_base / "composeApp" / "dist" / "js" / "productionExecutable",
+                ])
         for d in candidates:
             if not d.exists():
                 continue

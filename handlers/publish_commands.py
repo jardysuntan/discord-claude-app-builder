@@ -186,8 +186,8 @@ async def handle_appname_cmd(
         await ctx.send(channel, "❌ No workspace set.")
         return
 
-    if not ctx.registry.can_access(ws_key, user_id, is_admin):
-        await ctx.send(channel, "You don't have access to that workspace.")
+    if not is_admin and not ctx.registry.is_owner(ws_key, user_id):
+        await ctx.send(channel, "Only the workspace owner can rename it.")
         return
 
     # 1. Rename workspace key in registry
