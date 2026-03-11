@@ -1,16 +1,5 @@
 """
 parser.py — Message grammar for KMP cross-platform bot.
-
-New/updated commands:
-    /buildapp <desc>              → build full app (Android + iOS + Web)
-    /build android|ios|web        → build specific platform
-    /demo android|ios|web         → demo specific platform
-    /vid android                  → video from Android emulator
-    /fix [instructions]           → auto-fix build errors
-    /widget <description>         → add iOS home screen widget
-    /create <AppName>             → scaffold KMP project
-    /tryapp <ws> [platform]       → let anyone try the app
-    /showcase <ws>                → post demo for everyone
 """
 
 from dataclasses import dataclass
@@ -72,10 +61,6 @@ def parse(text: str) -> ParseResult:
                 return Command(name="help")
             case "/ls" | "/workspaces":
                 return Command(name="ls")
-            case "/use":
-                return Command(name="use", workspace=rest.lower() or None)
-            case "/where":
-                return Command(name="where")
 
             # ── Build & run ──────────────────────────────────────────
             case "/buildapp" | "/build-app":
@@ -88,9 +73,6 @@ def parse(text: str) -> ParseResult:
                     return Command(name="buildapp", raw_cmd=buildapp_rest or None)
                 platform, remainder = _parse_platform(rest)
                 return Command(name="build", platform=platform or "all")
-
-            case "/create":
-                return Command(name="create", app_name=rest or None)
 
             case "/deleteapp" | "/remove":
                 return Command(name="deleteapp", workspace=rest.lower() if rest else None)
@@ -105,10 +87,6 @@ def parse(text: str) -> ParseResult:
                 platform, _ = _parse_platform(rest)
                 return Command(name="demo", platform=platform)
 
-            case "/deploy":
-                platform, _ = _parse_platform(rest)
-                return Command(name="deploy", platform=platform or "ios")
-
             case "/testflight":
                 return Command(name="testflight")
 
@@ -117,15 +95,6 @@ def parse(text: str) -> ParseResult:
 
             case "/appname":
                 return Command(name="appname", raw_cmd=rest)
-
-            case "/vid" | "/viddemo":
-                return Command(name="vid", platform="android")
-
-            case "/fix":
-                return Command(name="fix", raw_cmd=rest or None)
-
-            case "/widget":
-                return Command(name="widget", raw_cmd=rest or None)
 
             # ── Terminal ─────────────────────────────────────────────
             case "/run":
@@ -180,9 +149,7 @@ def parse(text: str) -> ParseResult:
             case "/done":
                 return Command(name="done")
 
-            # ── Queue & spend ────────────────────────────────────────
-            case "/queue":
-                return Command(name="queue", raw_cmd=rest or None)
+            # ── Spend ─────────────────────────────────────────────────
             case "/spend":
                 return Command(name="spend")
 
@@ -202,26 +169,15 @@ def parse(text: str) -> ParseResult:
             case "/admin":
                 return Command(name="admin")
 
-            # ── Memory & system ──────────────────────────────────────
-            case "/memory":
-                mem_parts = rest.split(None, 1)
-                sub = mem_parts[0].lower() if mem_parts else None
-                arg = mem_parts[1] if len(mem_parts) > 1 else None
-                return Command(name="memory", sub=sub, arg=arg)
-            case "/fixes":
-                return Command(name="fixes", sub=rest.lower().strip() if rest else None)
+            # ── System ────────────────────────────────────────────────
             case "/setup":
                 return Command(name="setup")
             case "/health":
                 return Command(name="health")
             case "/reload":
                 return Command(name="reload")
-            case "/patch-bot":
-                return Command(name="patch-bot", raw_cmd=rest or None)
             case "/bot-todo":
                 return Command(name="bot-todo", raw_cmd=rest or None)
-            case "/dashboard":
-                return Command(name="dashboard", sub=rest.lower().strip() if rest else None)
             case "/newsession":
                 return Command(name="newsession")
             case "/maintenance":

@@ -15,8 +15,10 @@ class WorkspaceRegistry:
         self._workspaces: dict[str, dict] = {}  # key -> {"path": str, "owner_id": int}
         self._user_defaults: dict[int, str] = {}
         self._user_platforms: dict[int, str] = {}
+        self._user_tips_hidden: set[int] = set()
         self._defaults_path = Path(config.WORKSPACES_PATH).parent / "user_defaults.json"
         self._platforms_path = Path(config.WORKSPACES_PATH).parent / "user_platforms.json"
+        self._tips_path = Path(config.WORKSPACES_PATH).parent / "user_tips.json"
         self.reload()
         self._global_default = config.DEFAULT_WORKSPACE or None
 
@@ -44,6 +46,14 @@ class WorkspaceRegistry:
                 self._user_platforms = {int(k): v for k, v in raw.items()}
             except (json.JSONDecodeError, ValueError):
                 self._user_platforms = {}
+        # Load persisted tips preferences
+        if self._tips_path.exists():
+            try:
+                with open(self._tips_path) as f:
+                    raw = json.load(f)
+                self._user_tips_hidden = {int(uid) for uid in raw}
+            except (json.JSONDecodeError, ValueError):
+                self._user_tips_hidden = set()
 
     def _migrate(self, raw: dict) -> dict[str, dict]:
         """Auto-migrate legacy string values to {path, owner_id} dicts."""
@@ -211,3 +221,15 @@ class WorkspaceRegistry:
     def _save_platforms(self):
         with open(self._platforms_path, "w") as f:
             json.dump({str(k): v for k, v in self._user_platforms.items()}, f, indent=2)
+
+    def hide_tips(self, user_id: int):
+        self._user_tips_hidden.add(user_id)
+        self._save_tips()
+
+    def show_tips(self, user_id: int) -> bool:
+        """Returns True if tips should be shown (default)."""
+        return user_id not in self._user_tips_hidden
+
+    def _save_tips(self):
+        with open(self._tips_path, "w") as f:
+            json.dump(list(self._user_tips_hidden), f)

@@ -22,6 +22,7 @@ from agent_loop import run_agent_loop, format_loop_summary
 from supabase_client import snapshot_sql_files, detect_changed_sql, sync_sql_files
 from views.interview_views import CancelRequestView
 from helpers.ui_helpers import send_workspace_footer
+from helpers.pro_tips import pro_tips_embed, ProTipsDismissView
 
 if TYPE_CHECKING:
     from bot_context import BotContext
@@ -64,6 +65,15 @@ async def handle_prompt(
             channel,
             f"⛔ Daily budget reached (${ctx.cost_tracker.today_spent(user_id):.2f} / "
             f"${user_cap:.2f}). Try again tomorrow.",
+        )
+
+    # Maps WIP warning
+    _MAP_KEYWORDS = {"map", "maps", "google maps", "mapkit", "leaflet", "geolocation", "mapview"}
+    if any(kw in prompt.lower() for kw in _MAP_KEYWORDS):
+        await ctx.send(channel,
+            "\U0001f6a7 **Heads up:** Maps in KMP are still a work-in-progress. "
+            "The bot will try, but maps may not render correctly on all platforms. "
+            "Ping `jared.e.tan@gmail.com` if you need help."
         )
 
     cancel_view = CancelRequestView(ctx, user_id, ws_key)
@@ -203,3 +213,7 @@ async def handle_prompt(
                 )
 
     await send_workspace_footer(ctx, channel, user_id, is_admin=is_admin)
+
+    if ctx.registry.show_tips(user_id):
+        view = ProTipsDismissView(ctx, user_id)
+        await channel.send(embed=pro_tips_embed(), view=view)

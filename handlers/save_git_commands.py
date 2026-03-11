@@ -36,15 +36,22 @@ async def handle_save(ctx: BotContext, cmd: Command, channel, user_id: int, is_a
             case "redo":
                 await ctx.send(channel, await git_cmd.handle_save_redo(ws_path))
             case "github":
+                if not is_admin:
+                    return await ctx.send(channel, "🔒 `/save github` is admin-only.")
                 await ctx.send(channel, await git_cmd.handle_save_github(ws_path, ws_key))
             case _:
                 if cmd.raw_cmd:
                     # Custom message: save directly, no preview
-                    await ctx.send(channel, await git_cmd.handle_save(
-                        ws_path, ws_key, claude=ctx.claude, custom_msg=cmd.raw_cmd))
+                    loading = await channel.send("💾 Saving…")
+                    save_result = await git_cmd.handle_save(
+                        ws_path, ws_key, claude=ctx.claude, custom_msg=cmd.raw_cmd)
+                    await loading.delete()
+                    await ctx.send(channel, save_result)
                 else:
                     # No message: preview with confirm/edit buttons
+                    loading = await channel.send("💾 Saving…")
                     result = await git_cmd.prepare_save(ws_path, ws_key, claude=ctx.claude)
+                    await loading.delete()
                     if isinstance(result, str):
                         await ctx.send(channel, result)
                     else:
@@ -57,80 +64,74 @@ async def handle_save(ctx: BotContext, cmd: Command, channel, user_id: int, is_a
                         view.message = await channel.send(preview, view=view)
 
 
-async def handle_gitstatus(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
+async def _admin_git(ctx, cmd, channel, user_id, is_admin):
+    """Common admin + workspace check for git commands."""
+    if not is_admin:
+        await ctx.send(channel, "🔒 Git commands are admin-only.")
+        return None, None
     ws_key, ws_path = ctx.registry.resolve(None, user_id)
     if not ws_path:
         await ctx.send(channel, "❌ No workspace set.")
-    else:
+        return None, None
+    return ws_key, ws_path
+
+
+async def handle_gitstatus(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
+    ws_key, ws_path = await _admin_git(ctx, cmd, channel, user_id, is_admin)
+    if ws_path:
         await ctx.send(channel, await git_cmd.handle_status(ws_path, ws_key))
 
 
 async def handle_diff(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
-    ws_key, ws_path = ctx.registry.resolve(None, user_id)
-    if not ws_path:
-        await ctx.send(channel, "❌ No workspace set.")
-    else:
+    ws_key, ws_path = await _admin_git(ctx, cmd, channel, user_id, is_admin)
+    if ws_path:
         full = cmd.sub == "full" if cmd.sub else False
         await ctx.send(channel, await git_cmd.handle_diff(ws_path, full))
 
 
 async def handle_commit(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
-    ws_key, ws_path = ctx.registry.resolve(None, user_id)
-    if not ws_path:
-        await ctx.send(channel, "❌ No workspace set.")
-    else:
+    ws_key, ws_path = await _admin_git(ctx, cmd, channel, user_id, is_admin)
+    if ws_path:
         result = await git_cmd.handle_commit(
             ws_path, ws_key, message=cmd.raw_cmd, claude=ctx.claude, auto_push=True)
         await ctx.send(channel, result)
 
 
 async def handle_undo(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
-    ws_key, ws_path = ctx.registry.resolve(None, user_id)
-    if not ws_path:
-        await ctx.send(channel, "❌ No workspace set.")
-    else:
+    ws_key, ws_path = await _admin_git(ctx, cmd, channel, user_id, is_admin)
+    if ws_path:
         await ctx.send(channel, await git_cmd.handle_undo(ws_path))
 
 
 async def handle_gitlog(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
-    ws_key, ws_path = ctx.registry.resolve(None, user_id)
-    if not ws_path:
-        await ctx.send(channel, "❌ No workspace set.")
-    else:
+    ws_key, ws_path = await _admin_git(ctx, cmd, channel, user_id, is_admin)
+    if ws_path:
         count = int(cmd.raw_cmd) if cmd.raw_cmd and cmd.raw_cmd.isdigit() else 10
         await ctx.send(channel, await git_cmd.handle_log(ws_path, count))
 
 
 async def handle_branch(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
-    ws_key, ws_path = ctx.registry.resolve(None, user_id)
-    if not ws_path:
-        await ctx.send(channel, "❌ No workspace set.")
-    else:
+    ws_key, ws_path = await _admin_git(ctx, cmd, channel, user_id, is_admin)
+    if ws_path:
         await ctx.send(channel, await git_cmd.handle_branch(ws_path, cmd.raw_cmd))
 
 
 async def handle_stash(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
-    ws_key, ws_path = ctx.registry.resolve(None, user_id)
-    if not ws_path:
-        await ctx.send(channel, "❌ No workspace set.")
-    else:
+    ws_key, ws_path = await _admin_git(ctx, cmd, channel, user_id, is_admin)
+    if ws_path:
         await ctx.send(channel, await git_cmd.handle_stash(ws_path, pop=(cmd.sub == "pop")))
 
 
 async def handle_pr(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
-    ws_key, ws_path = ctx.registry.resolve(None, user_id)
-    if not ws_path:
-        await ctx.send(channel, "❌ No workspace set.")
-    else:
+    ws_key, ws_path = await _admin_git(ctx, cmd, channel, user_id, is_admin)
+    if ws_path:
         await ctx.send(channel, await git_cmd.handle_pr(
             ws_path, ws_key, title=cmd.raw_cmd, claude=ctx.claude))
 
 
 async def handle_repo(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
-    ws_key, ws_path = ctx.registry.resolve(None, user_id)
-    if not ws_path:
-        await ctx.send(channel, "❌ No workspace set.")
-    else:
+    ws_key, ws_path = await _admin_git(ctx, cmd, channel, user_id, is_admin)
+    if ws_path:
         await ctx.send(channel, await git_cmd.handle_repo(
             ws_path, ws_key, sub=cmd.sub, arg=cmd.arg))
 

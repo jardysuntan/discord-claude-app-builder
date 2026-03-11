@@ -1,8 +1,6 @@
 """
-handlers/build_commands.py — Build, demo, deploy, and related commands
-(buildapp, build, platform, demo, deploy, vid, fix, widget).
-
-Extracted from bot.py lines 2002-2234.
+handlers/build_commands.py — Build, demo, and related commands
+(buildapp, platform, demo).
 """
 
 from __future__ import annotations
@@ -10,17 +8,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import config
-from bot_context import STILL_LISTENING
-from commands import fix, widget
 from helpers.demo_runner import run_demo
-from platforms import (
-    build_platform,
-    deploy_ios,
-    deploy_android,
-    AndroidPlatform,
-)
 from views.buildapp_views import _BuildAppView
-from views.demo_views import DemoPlatformView
 from views.deploy_embeds import _ios_deploy_info_embed
 
 if TYPE_CHECKING:
@@ -38,27 +27,6 @@ async def handle_buildapp(ctx: BotContext, cmd: Command, channel, user_id: int, 
             "**Let's build an app!** Tap the button to get started.",
             view=view,
         )
-
-
-async def handle_build(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
-    if not config.AGENT_MODE:
-        await ctx.send(channel, "🔒 Agent mode OFF.")
-    else:
-        ws_key, ws_path = ctx.registry.resolve(None, user_id)
-        if not ws_path:
-            await ctx.send(channel, "❌ No workspace set.")
-        else:
-            platform = cmd.platform or "android"
-            await ctx.send(channel, f"🔨 Building **{ws_key}** [{platform}]...")
-            await ctx.send(channel, STILL_LISTENING)
-            result = await build_platform(platform, ws_path)
-            if result.success:
-                await ctx.send(channel, f"✅ {platform.upper()} build succeeded.")
-            else:
-                await ctx.send(
-                    channel,
-                    f"❌ {platform.upper()} build failed:\n```\n{result.error[:1200]}\n```",
-                )
 
 
 async def handle_platform(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
@@ -136,106 +104,8 @@ async def handle_demo(ctx: BotContext, cmd: Command, channel, user_id: int, is_a
             await run_demo(ctx, channel, ws_key, ws_path, platform)
 
 
-async def handle_deploy(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
-    if not config.AGENT_MODE:
-        await ctx.send(channel, "🔒 Agent mode OFF.")
-    elif not is_admin:
-        await ctx.send(channel, "🔒 `/deploy` is admin-only. Use `/testflight` instead.")
-    else:
-        ws_key, ws_path = ctx.registry.resolve(None, user_id)
-        if not ws_path:
-            await ctx.send(channel, "❌ No workspace set.")
-        else:
-            platform = cmd.platform or "ios"
-            await ctx.send(
-                channel,
-                f"📲 Deploying **{ws_key}** to {platform.upper()} device...",
-            )
-            if platform == "ios":
-                result = await deploy_ios(ws_path)
-                await ctx.send(channel, result.message)
-            elif platform == "android":
-                result = await deploy_android(ws_path)
-                await ctx.send(channel, result.message)
-            else:
-                await ctx.send(
-                    channel,
-                    f"❌ Deploy supports `ios` or `android`, not `{platform}`.",
-                )
-
-
-async def handle_vid(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
-    if not config.AGENT_MODE:
-        await ctx.send(channel, "🔒 Agent mode OFF.")
-    elif not is_admin:
-        await ctx.send(channel, "🔒 `/vid` is admin-only.")
-    else:
-        ws_key, ws_path = ctx.registry.resolve(None, user_id)
-        if not ws_path:
-            await ctx.send(channel, "❌ No workspace set.")
-        else:
-            await ctx.send(channel, f"🎥 Recording **{ws_key}**...")
-            ok, msg = await AndroidPlatform.ensure_device()
-            if not ok:
-                await ctx.send(channel, f"❌ {msg}")
-            else:
-                result = await AndroidPlatform.build(ws_path)
-                if not result.success:
-                    await ctx.send(
-                        channel,
-                        f"❌ Build failed:\n```\n{result.error[:800]}\n```",
-                    )
-                else:
-                    await AndroidPlatform.launch(ws_path)
-                    video = await AndroidPlatform.record()
-                    await ctx.send(channel, "✅ Recording captured.", file_path=video)
-
-
-async def handle_fix(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
-    if not config.AGENT_MODE:
-        await ctx.send(channel, "🔒 Agent mode OFF.")
-    else:
-        ws_key, ws_path = ctx.registry.resolve(None, user_id)
-        if not ws_path:
-            await ctx.send(channel, "❌ No workspace set.")
-        else:
-            await ctx.send(channel, STILL_LISTENING)
-
-            async def fix_status(msg, fpath=None):
-                await ctx.send(channel, msg, file_path=fpath)
-
-            await fix.handle_fix(
-                cmd.raw_cmd or "", ws_key, ws_path, ctx.claude,
-                on_status=fix_status,
-            )
-
-
-async def handle_widget(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
-    if not config.AGENT_MODE:
-        await ctx.send(channel, "🔒 Agent mode OFF.")
-    elif not is_admin:
-        await ctx.send(channel, "🔒 `/widget` is admin-only (iOS feature).")
-    else:
-        ws_key, ws_path = ctx.registry.resolve(None, user_id)
-        if not ws_path:
-            await ctx.send(channel, "❌ No workspace set.")
-        else:
-            async def widget_status(msg, fpath=None):
-                await ctx.send(channel, msg, file_path=fpath)
-
-            await widget.handle_widget(
-                cmd.raw_cmd or "", ws_key, ws_path, ctx.claude,
-                on_status=widget_status,
-            )
-
-
 HANDLERS = {
     "buildapp": handle_buildapp,
-    "build": handle_build,
     "platform": handle_platform,
     "demo": handle_demo,
-    "deploy": handle_deploy,
-    "vid": handle_vid,
-    "fix": handle_fix,
-    "widget": handle_widget,
 }

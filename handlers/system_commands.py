@@ -1,9 +1,6 @@
 """
 handlers/system_commands.py — System and utility commands
-(spend, memory, fixes, setup, health, reload, patch-bot, bot-todo,
- dashboard, newsession, maintenance, announce, queue, unknown).
-
-Extracted from bot.py lines 2256-2731.
+(spend, setup, health, reload, bot-todo, newsession, maintenance, announce).
 """
 
 from __future__ import annotations
@@ -14,11 +11,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import config
-from commands import memory_cmd, fixes_cmd, queue
 from commands.bot_todo import handle_bot_todo
-from commands.dashboard import handle_dashboard
 from helpers.ui_helpers import send_workspace_footer
-from views.queue_views import QueueBuilderView
 
 if TYPE_CHECKING:
     from bot_context import BotContext
@@ -46,24 +40,6 @@ async def handle_spend(ctx: BotContext, cmd: Command, channel, user_id: int, is_
             name = ctx.allowlist.get_display_name(uid) or str(uid)
             lines.append(f"  {name}: ${spent:.4f} ({tasks} tasks)")
     await ctx.send(channel, "\n".join(lines))
-
-
-async def handle_memory(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
-    ws_key, ws_path = ctx.registry.resolve(None, user_id)
-    if not ws_path:
-        await ctx.send(channel, "❌ No workspace set.")
-    else:
-        await ctx.send(channel, memory_cmd.handle_memory(
-            cmd.sub, cmd.arg, ws_path, ws_key))
-
-
-async def handle_fixes(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
-    ws_key, ws_path = ctx.registry.resolve(None, user_id)
-    if not ws_path:
-        await ctx.send(channel, "❌ No workspace set.")
-    else:
-        await ctx.send(channel, fixes_cmd.handle_fixes(
-            cmd.sub, ws_path, ws_key))
 
 
 async def handle_setup(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
@@ -166,24 +142,11 @@ async def handle_reload(ctx: BotContext, cmd: Command, channel, user_id: int, is
     os.system("pm2 restart discord-claude-bridge")
 
 
-async def handle_patch_bot(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
-    pass  # retired
-
-
 async def handle_bot_todo_cmd(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
+    if not is_admin:
+        await ctx.send(channel, "🔒 Admin-only command.")
+        return
     await ctx.send(channel, handle_bot_todo(cmd.raw_cmd))
-
-
-async def handle_dashboard_cmd(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
-    if not config.AGENT_MODE:
-        await ctx.send(channel, "🔒 Agent mode OFF.")
-    else:
-        async def dash_status(msg, fpath=None):
-            await ctx.send(channel, msg, file_path=fpath)
-
-        await handle_dashboard(
-            ctx.registry, dash_status, rebuild=(cmd.sub == "rebuild"),
-        )
 
 
 async def handle_newsession(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
@@ -234,45 +197,18 @@ async def handle_announce(ctx: BotContext, cmd: Command, channel, user_id: int, 
             await ctx.send(channel, f"📢 {cmd.raw_cmd}")
 
 
-async def handle_queue_cmd(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
-    if not config.AGENT_MODE:
-        await ctx.send(channel, "🔒 Agent mode OFF.")
-    else:
-        ws_key, ws_path = ctx.registry.resolve(None, user_id)
-        if not ws_path:
-            await ctx.send(channel, "❌ No workspace set.")
-        elif not cmd.raw_cmd:
-            # Interactive wizard
-            view = QueueBuilderView(ctx, user_id, channel, ws_key, ws_path)
-            await channel.send(view.build_message(), view=view)
-        else:
-            # Inline syntax: /queue task1 --- task2
-            async def queue_status(msg, fpath=None):
-                await ctx.send(channel, msg, file_path=fpath)
-
-            await queue.handle_queue(
-                cmd.raw_cmd, ws_key, ws_path, ctx.claude, ctx.cost_tracker,
-                on_status=queue_status, user_id=user_id,
-            )
-
-
 async def handle_unknown(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
     await ctx.send(channel, "❓ Unknown command. `/help`")
 
 
 HANDLERS = {
     "spend": handle_spend,
-    "memory": handle_memory,
-    "fixes": handle_fixes,
     "setup": handle_setup,
     "health": handle_health,
     "reload": handle_reload,
-    "patch-bot": handle_patch_bot,
     "bot-todo": handle_bot_todo_cmd,
-    "dashboard": handle_dashboard_cmd,
     "newsession": handle_newsession,
     "maintenance": handle_maintenance,
     "announce": handle_announce,
-    "queue": handle_queue_cmd,
     "unknown": handle_unknown,
 }

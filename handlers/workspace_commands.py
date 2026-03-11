@@ -1,8 +1,6 @@
 """
 handlers/workspace_commands.py — Workspace management commands
-(help, ls, use, where, create, deleteapp).
-
-Extracted from bot.py lines 1908-2000.
+(help, ls, create, deleteapp).
 """
 
 from __future__ import annotations
@@ -13,10 +11,9 @@ import discord
 
 import config
 from commands.create import create_kmp_project
-from commands.playstore_state import PlayStoreState
 from helpers.ui_helpers import help_text
+from helpers.pro_tips import pro_tips_embed
 from views.workspace_views import ConfirmDeleteView, WorkspaceSelectorView
-from views.playstore_views import PlayStoreChecklistView, _playstore_checklist_embed
 
 if TYPE_CHECKING:
     from bot_context import BotContext
@@ -25,6 +22,7 @@ if TYPE_CHECKING:
 
 async def handle_help(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
     await ctx.send(channel, help_text(is_admin))
+    await channel.send(embed=pro_tips_embed())
 
 
 async def handle_ls(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
@@ -89,44 +87,6 @@ async def handle_ls(ctx: BotContext, cmd: Command, channel, user_id: int, is_adm
             await channel.send(embed=embed)
 
 
-async def handle_use(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
-    if not cmd.workspace:
-        await ctx.send(channel, "Usage: `/use <workspace>`")
-    elif not ctx.registry.exists(cmd.workspace):
-        await ctx.send(channel, f"❌ Unknown: `{cmd.workspace}`")
-    elif not ctx.registry.can_access(cmd.workspace, user_id, is_admin, user_email=ctx.allowlist.get_email(user_id)):
-        await ctx.send(channel, "You don't have access to that workspace.")
-    elif ctx.registry.set_default(user_id, cmd.workspace):
-        await ctx.send(channel, f"✅ Default → **{cmd.workspace}**")
-        # Show incomplete Play Store checklist if exists
-        _use_ws_path = ctx.registry.get_path(cmd.workspace)
-        if _use_ws_path and PlayStoreState.exists(_use_ws_path):
-            _use_state = PlayStoreState.load(_use_ws_path)
-            if not _use_state.all_done():
-                from platforms import AndroidPlatform as _AP2
-                _use_pkg = _AP2.parse_app_id(_use_ws_path) or ""
-                _use_app = cmd.workspace.replace("-", " ").replace("_", " ").title()
-                _use_view = PlayStoreChecklistView(
-                    ctx, user_id, cmd.workspace, _use_ws_path, _use_app, _use_pkg,
-                )
-                await channel.send(
-                    embed=_playstore_checklist_embed(
-                        cmd.workspace, _use_app, _use_pkg, _use_view.state,
-                    ),
-                    view=_use_view,
-                )
-    else:
-        await ctx.send(channel, "❌ Could not set default.")
-
-
-async def handle_where(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
-    ws = ctx.registry.get_default(user_id)
-    if ws:
-        await ctx.send(channel, f"📂 **{ws}** → `{ctx.registry.get_path(ws)}`")
-    else:
-        await ctx.send(channel, "No default set.")
-
-
 async def handle_create(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
     if not config.AGENT_MODE:
         await ctx.send(channel, "🔒 Agent mode OFF.")
@@ -135,6 +95,9 @@ async def handle_create(ctx: BotContext, cmd: Command, channel, user_id: int, is
     else:
         result = await create_kmp_project(cmd.app_name, ctx.registry, owner_id=user_id)
         await ctx.send(channel, result.message)
+        if result.success and result.slug:
+            ctx.registry.set_default(user_id, result.slug)
+            await ctx.send(channel, f"\U0001f4c2 Switched to **{result.slug}**")
 
 
 async def handle_deleteapp(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
@@ -160,8 +123,5 @@ async def handle_deleteapp(ctx: BotContext, cmd: Command, channel, user_id: int,
 HANDLERS = {
     "help": handle_help,
     "ls": handle_ls,
-    "use": handle_use,
-    "where": handle_where,
-    "create": handle_create,
     "deleteapp": handle_deleteapp,
 }
