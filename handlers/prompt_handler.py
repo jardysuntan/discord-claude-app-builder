@@ -67,13 +67,12 @@ async def handle_prompt(
             f"${user_cap:.2f}). Try again tomorrow.",
         )
 
-    # Maps WIP warning
+    # Maps info
     _MAP_KEYWORDS = {"map", "maps", "google maps", "mapkit", "leaflet", "geolocation", "mapview"}
     if any(kw in prompt.lower() for kw in _MAP_KEYWORDS):
         await ctx.send(channel,
-            "\U0001f6a7 **Heads up:** Maps in KMP are still a work-in-progress. "
-            "The bot will try, but maps may not render correctly on all platforms. "
-            "Ping `jared.e.tan@gmail.com` if you need help."
+            "\U0001f5fa\ufe0f **Maps:** Leaflet.js maps are fully supported across all platforms. "
+            "Google Maps will be supported in a future update."
         )
 
     cancel_view = CancelRequestView(ctx, user_id, ws_key)

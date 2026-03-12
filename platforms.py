@@ -851,7 +851,7 @@ class WebPlatform:
             "class H(http.server.SimpleHTTPRequestHandler):\n"
             "  def end_headers(self):\n"
             "    self.send_header('Cross-Origin-Opener-Policy','same-origin')\n"
-            "    self.send_header('Cross-Origin-Embedder-Policy','require-corp')\n"
+            "    self.send_header('Cross-Origin-Embedder-Policy','credentialless')\n"
             "    super().end_headers()\n"
             "  def log_message(self,*a):pass\n"
             "http.server.HTTPServer(('',int(sys.argv[1])),H).serve_forever()\n"
