@@ -147,12 +147,28 @@ def _progress_from_event(event: dict, state: dict | None = None) -> Optional[str
 
 
 class ClaudeRunner:
+    _SESSIONS_FILE = Path(config.WORKSPACES_PATH).parent / "claude_sessions.json"
+
     def __init__(self):
         self._sessions: dict[str, str] = {}
         self._run_durations: dict[str, list[float]] = {}  # workspace → last N durations
         self._active_procs: dict[str, asyncio.subprocess.Process] = {}
         self._claude_bin = _resolve_claude_bin()
+        self._load_sessions()
         print(f"  Claude binary:   {self._claude_bin}")
+        print(f"  Persisted sessions: {len(self._sessions)}")
+
+    def _load_sessions(self):
+        if self._SESSIONS_FILE.exists():
+            try:
+                with open(self._SESSIONS_FILE) as f:
+                    self._sessions = json.load(f)
+            except (json.JSONDecodeError, ValueError):
+                self._sessions = {}
+
+    def _save_sessions(self):
+        with open(self._SESSIONS_FILE, "w") as f:
+            json.dump(self._sessions, f, indent=2)
 
     def cancel(self, workspace: str) -> bool:
         """Kill the active Claude process for a workspace. Returns True if killed."""
@@ -182,7 +198,8 @@ class ClaudeRunner:
         return self._sessions.get(workspace)
 
     def clear_session(self, workspace: str):
-        self._sessions.pop(workspace, None)
+        if self._sessions.pop(workspace, None) is not None:
+            self._save_sessions()
 
     async def run(
         self,
@@ -359,6 +376,7 @@ class ClaudeRunner:
 
         if result_session_id:
             self._sessions[workspace_key] = result_session_id
+            self._save_sessions()
 
         return ClaudeResult(
             stdout=result_text,
