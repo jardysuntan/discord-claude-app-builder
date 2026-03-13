@@ -22,6 +22,7 @@ def help_text(is_admin: bool = True):
         "**Chat:**",
         "Just send a message to chat with the bot about your current app.",
         "Or use `@myapp make the button blue` to talk to a specific app.",
+        "Paste a screenshot to show the bot a bug or design — it can see images.",
         "`/ls` — list & switch apps",
         "`/rename <new name>` — rename current app",
         "`/remove <name>` — delete an app",

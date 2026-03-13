@@ -17,6 +17,7 @@ from platforms import (
     WebPlatform,
     demo_platform,
 )
+from helpers.web_screenshot import take_web_screenshot
 
 
 async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str):
@@ -360,6 +361,9 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str):
                         return
 
                 await ctx.send(channel, f"✅ Web app live!\n🔗 {url}")
+                shot = await take_web_screenshot(f"http://localhost:{config.WEB_SERVE_PORT}")
+                if shot:
+                    await ctx.send(channel, "📸 Preview:", file_path=shot)
 
     else:
         result = await demo_platform(platform, ws_path)

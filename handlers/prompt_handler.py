@@ -23,10 +23,31 @@ from supabase_client import snapshot_sql_files, detect_changed_sql, sync_sql_fil
 from views.interview_views import CancelRequestView
 from helpers.ui_helpers import send_workspace_footer
 from helpers.pro_tips import pro_tips_embed, ProTipsDismissView
+from helpers.web_screenshot import take_web_screenshot
 
 if TYPE_CHECKING:
     from bot_context import BotContext
     from parser import ParseResult
+
+
+_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+
+
+async def _save_attachments(attachments, ws_path: str) -> list[str]:
+    """Download image attachments to workspace, return list of saved paths."""
+    if not attachments:
+        return []
+    from pathlib import Path
+    upload_dir = Path(ws_path) / "_discord_uploads"
+    upload_dir.mkdir(exist_ok=True)
+    saved = []
+    for att in attachments:
+        ext = Path(att.filename).suffix.lower()
+        if ext in _IMAGE_EXTENSIONS:
+            dest = upload_dir / att.filename
+            await att.save(dest)
+            saved.append(str(dest))
+    return saved
 
 
 async def handle_prompt(
@@ -35,6 +56,7 @@ async def handle_prompt(
     channel,
     user_id: int,
     is_admin: bool,
+    attachments=None,
 ) -> None:
     """Route a workspace or fallback prompt to Claude, with cost gating,
     cancel support, SQL sync, auto web build, and auto preview."""
@@ -74,6 +96,16 @@ async def handle_prompt(
             "\U0001f5fa\ufe0f **Maps:** Leaflet.js maps are fully supported across all platforms. "
             "Google Maps will be supported in a future update."
         )
+
+    # Download image attachments and augment prompt
+    image_paths = await _save_attachments(attachments, ws_path)
+    if image_paths:
+        paths_str = "\n".join(f"  - {p}" for p in image_paths)
+        prompt = (
+            f"The user attached {len(image_paths)} image(s). "
+            f"Read these files to see what they shared:\n{paths_str}\n\n{prompt}"
+        )
+        await ctx.send(channel, f"📎 {len(image_paths)} image(s) attached — Claude will review them.")
 
     cancel_view = CancelRequestView(ctx, user_id, ws_key)
     cancel_msg = await channel.send(
@@ -147,6 +179,9 @@ async def handle_prompt(
             url = await WebPlatform.serve(ws_path)
             if url:
                 await ctx.send(channel, f"✅ Web build succeeded → {url}")
+                shot = await take_web_screenshot(f"http://localhost:{config.WEB_SERVE_PORT}")
+                if shot:
+                    await ctx.send(channel, "📸 Preview:", file_path=shot)
             else:
                 await ctx.send(channel, "✅ Web build succeeded (no dist dir found).")
         else:
@@ -174,6 +209,9 @@ async def handle_prompt(
                 url = await WebPlatform.serve(ws_path)
                 if url:
                     await ctx.send(channel, f"✅ Web fixed → {url}")
+                    shot = await take_web_screenshot(f"http://localhost:{config.WEB_SERVE_PORT}")
+                    if shot:
+                        await ctx.send(channel, "📸 Preview:", file_path=shot)
 
         # Auto-preview: build + screenshot for user's preferred platform
         # Non-admin: web preview URL only (no simulator/emulator access)

@@ -21,6 +21,14 @@ def pro_tips_embed() -> discord.Embed:
         inline=False,
     )
     embed.add_field(
+        name="Share screenshots",
+        value=(
+            "See a bug? Just paste a screenshot \u2014 the bot can see images. "
+            "Add a message like \"fix this\" or send the image alone."
+        ),
+        inline=False,
+    )
+    embed.add_field(
         name="Debug smarter",
         value=(
             "Adding a tricky feature? Ask the bot to add debug/log statements, "

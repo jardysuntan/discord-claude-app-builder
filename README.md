@@ -1,6 +1,6 @@
 # discord-claude-app-builder
 
-A Discord bot that turns natural language into production-quality cross-platform apps. Describe what you want, and it scaffolds a Kotlin Multiplatform project, has Claude Code write the code, auto-fixes build errors, and demos the result on Android, iOS, and Web — all from your phone.
+A Discord bot that turns chat messages into cross-platform apps. Describe what you want, and it builds it — Android, iOS, and Web — all from your phone.
 
 <table>
   <tr>
@@ -17,21 +17,9 @@ A Discord bot that turns natural language into production-quality cross-platform
       <img src="https://github.com/user-attachments/assets/1259c341-12c7-4128-8c3e-140cbc779570" width="350"/>
     </td>
   </tr>
-
-
 </table>
 
-### What makes this different
-
-You don't need to think about the technical stuff. The bot is built on years of production mobile engineering experience, so it knows what makes apps feel real — error handling, loading states, offline support, platform-native navigation, smooth transitions. You just describe your idea and the bot takes care of the rest. It also auto-provisions a database, auto-fixes build errors, and remembers past fixes so it keeps getting better.
-
----
-
-## Getting Started
-
-You don't need to know how to code. Once the bot is running (see [Setup](#setup) below), everything happens through Discord messages.
-
-### Build your first app
+## Quick Start
 
 DM the bot:
 
@@ -39,379 +27,200 @@ DM the bot:
 /buildapp a pomodoro timer with task categories
 ```
 
-That's it. Wait a few minutes and you'll get:
-- A screenshot of your app running on Android
-- A video recording of it in action
-- A web link you can open on your phone right now
-- An iOS build ready for the simulator (or TestFlight)
+Wait a few minutes. You'll get a screenshot and a web link to try it immediately.
 
-### Talk to your app
-
-Every app gets its own workspace. Use `@appname` to tell Claude what to change:
+Then iterate:
 
 ```
 @pomodoro add a dark mode toggle
-@pomodoro make the timer bigger and use a circular progress bar
-@pomodoro add sound effects when the timer ends
+@pomodoro make the timer bigger with a circular progress bar
 ```
 
-Then rebuild to see the changes:
+See a bug? Paste a screenshot — the bot can see images and fix what it sees.
 
-```
-/demo web
-/demo android
-/demo ios
-```
+Run `/demo` to preview, `/save` to checkpoint, `/testflight` or `/playstore` to publish.
 
-### What you can say
+That's it. No code, no setup, no installs.
+
+## Commands
 
 | Command | What it does |
 |---------|-------------|
-| `/buildapp <describe anything>` | Build a full app from a description |
-| `@appname <request>` | Tell Claude to change your app |
-| `/demo android` or `ios` or `web` | See your app running |
-| `/fix` | Auto-fix build errors (Claude reads the error and fixes it) |
-| `/deploy ios` | Install directly on your iPhone |
-| `/testflight` | Upload to TestFlight so anyone can install it |
-| `/widget <description>` | Add an iOS home screen widget |
-| `/vid` | Record a video of the Android app |
-| `/dashboard` | A launcher page showing all your apps |
-| `/ls` | See all your projects |
-| `/use <appname>` | Switch to a different project |
-| `/fixes` | See what build errors Claude has fixed so far |
-| `/help` | Full command list |
+| `/buildapp <description>` | Build a full app from a description |
+| `@appname <request>` | Change your app with natural language |
+| `/demo` | Build and preview (screenshot + web link) |
+| `/save` | Save your progress (undo with `/save list`) |
+| `/testflight` | Publish to iOS TestFlight |
+| `/playstore` | Publish to Google Play |
+| `/ls` | List and switch apps |
+| `/help` | Full command reference |
 
-### Tips for better results
+**More:** [`/rename`](#all-commands) [`/spend`](#all-commands) [`/run`](#all-commands) [`/status`](#all-commands) [`/diff`](#all-commands) [`/commit`](#all-commands) [`/pr`](#all-commands) — see [All Commands](#all-commands)
 
-- **Be specific.** "A workout tracker with exercise categories, sets/reps logging, and a rest timer" works way better than "a fitness app."
-- **Iterate in small steps.** Build the core idea first, then layer on features one at a time with `@appname`.
-- **Let the bot fix itself.** If something breaks, the bot automatically tries to fix it. You can also run `/fix` with extra instructions like `/fix use Material 3 colors`.
-- **Check the fix log.** `/fixes` shows you every error Claude has encountered and how it fixed it — the bot remembers these so it doesn't make the same mistake twice.
+## Tips
 
-### Typical flow from your phone
-
-1. `/buildapp a workout tracker` — wait a few minutes, get screenshots + web link
-2. Open the web link on your phone to try it out
-3. `@workouttracker add a rest timer between sets` — Claude modifies the code
-4. `/demo web` — see the update instantly
-5. `/testflight` — upload so friends can install it on their iPhones
+- **Be specific.** "A workout tracker with sets/reps logging and a rest timer" beats "a fitness app."
+- **Iterate small.** Build the core first, then add features one at a time.
+- **Share screenshots.** Paste an image of a bug or a design mockup — the bot reads images.
+- **Save often.** `/save` frequently so you can roll back with `/save list`.
 
 ---
 
-## Join and start building
-
-Want to try the bot? Here's how to get access:
-
-1. **Get a Discord invite** — ask Jared (jared.e.tan@gmail.com / [@jardysuntan](https://github.com/jardysuntan)) for an invite link to the Discord server
-2. **Join the server** — click the link, create a Discord account if you don't have one
-3. **Find the bot** — look for **ClaudeAppBot** in the member list on the right side
-4. **Start a conversation** — click the bot's name → **Message**
-5. **Say hi** — send any message and you'll be automatically approved
-6. **Build your first app** — send `/buildapp a pomodoro timer` and wait a few minutes
-
-That's it — no setup, no coding, no installs. Everything happens through chat.
-
----
-
-## How it works
-
-You DM the bot something like `/buildapp a habit tracker with streaks`. Behind the scenes:
-
-1. A project gets scaffolded from a template
-2. Claude Code writes all the UI and logic
-3. The bot builds for Android — if it fails, Claude reads the errors and fixes them (up to 8 attempts)
-4. Once it compiles, you get a screenshot and video from the Android emulator
-5. It builds for Web and gives you a link to try the app in your browser
-6. It builds for iOS — if it fails, Claude fixes those too, including crash-on-launch detection
-7. `/testflight` uploads to TestFlight so anyone can install it natively
-
-You get real-time progress updates in Discord as Claude works.
-
-**Build fix memory:** Every error and fix is logged per project. The next time a build fails, Claude sees what went wrong before and avoids repeating mistakes.
-
-### Supabase backend (automatic)
-
-When Supabase is configured, `/buildapp` automatically provisions a database for each app:
-
-1. Claude generates a Postgres schema tailored to the app description (tables, RLS policies, and a `get_app_config()` RPC)
-2. The bot executes the SQL on your Supabase project via the Management API
-3. The feature prompt tells Claude to wire up Ktor + kotlinx.serialization to fetch data from the RPC endpoint, with demo-data fallback
-
-The result: your app launches with real Supabase connectivity out of the box. Edit data in the Supabase Table Editor (it's a spreadsheet UI) and the app picks up changes on next launch.
-
-Without Supabase configured, `/buildapp` works exactly as before — apps use hardcoded demo data.
-
-To enable, add to `.env`:
-```bash
-SUPABASE_PROJECT_REF=your-project-ref
-SUPABASE_MANAGEMENT_KEY=your-management-key   # from supabase.com/dashboard/account/tokens
-SUPABASE_ANON_KEY=your-anon-key               # from project settings → API
-```
-
----
+*Everything below is for self-hosting or contributing to the bot.*
 
 ## Setup
 
-### Prerequisites
+<details>
+<summary><b>Prerequisites</b></summary>
 
-- macOS (needed for iOS builds; Android + Web work on Linux too)
+- macOS (needed for iOS builds; Android + Web work on Linux)
 - Python 3.10+
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
-- Android SDK with an AVD configured (for Android builds/demos)
-- Xcode (for iOS builds — optional, can add later)
-- Node.js + PM2 (`npm install -g pm2`)
-- A Discord bot token ([create one here](https://discord.com/developers/applications))
-- Tailscale (optional, for remote access from your phone)
+- Android SDK with an AVD configured
+- Xcode (optional, for iOS)
+- A Discord bot token ([create one](https://discord.com/developers/applications))
 
-### Install
+</details>
 
 ```bash
 git clone https://github.com/jardysuntan/discord-claude-app-builder.git
 cd discord-claude-app-builder
-
-python3 -m venv venv
-source venv/bin/activate
 pip install -r requirements.txt
-
-cp .env.example .env
-# Edit .env with your values (see below)
+cp .env.example .env   # edit with your values
 ```
 
-### Configure `.env`
-
-The important ones:
+**Minimum `.env`:**
 
 ```bash
 DISCORD_BOT_TOKEN=your-bot-token
-DISCORD_ALLOWED_USER_ID=your-discord-user-id   # only you can use build commands
-
-BASE_PROJECTS_DIR=~/Projects                     # where apps get created
-CLAUDE_BIN=claude                                # path to claude CLI
-ANDROID_AVD=Pixel_9_Pro_XL                       # your emulator name
-TAILSCALE_HOSTNAME=100.x.x.x                    # for remote web demo access
+DISCORD_ALLOWED_USER_ID=your-discord-user-id
+BASE_PROJECTS_DIR=~/Projects
+CLAUDE_BIN=claude
 ```
 
-See `.env.example` for all options (Android, iOS, Web, scrcpy, etc).
-
-### KMP template (recommended)
-
-Generate a template from [kmp.jetbrains.com](https://kmp.jetbrains.com) and place it at:
-
-```
-templates/kmp/KMPTemplate/
-```
-
-The bot will copy this for each new project. Without it, `commands/create.py` generates a minimal structure.
-
-### Run
+**Run:**
 
 ```bash
-# With PM2 (recommended — auto-restarts on file changes)
-pm2 start ecosystem.config.cjs
-pm2 logs discord-claude-bridge
-
-# Or directly
-python3 bot.py
+pm2 start ecosystem.config.cjs   # recommended — auto-restarts
+# or: python3 bot.py
 ```
 
----
+<details>
+<summary><b>Platform-specific setup (iOS, TestFlight, Tailscale, Supabase)</b></summary>
 
-## All Commands
+**iOS:**
+```bash
+sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+sudo xcodebuild -license accept
+```
 
-| Command | What it does |
-|---------|-------------|
-| `/build app <description>` | Full pipeline: scaffold + build + demo all platforms |
-| `/create <AppName>` | Just scaffold a project (no build) |
-| `/build android\|ios\|web` | Build for a specific platform |
-| `/demo android\|ios\|web` | Build + launch + screenshot |
-| `/deploy ios\|android` | Install on a physical device |
-| `/testflight` | Archive + upload to TestFlight |
-| `/fix [instructions]` | Auto-fix build errors with Claude |
-| `/widget <description>` | Add iOS home screen widget |
-| `/vid` | Record a video from the Android emulator |
-| `/deleteapp <name>` | Remove a project |
-| `/rename <old> <new>` | Rename a workspace |
-| `/queue task1 --- task2 --- ...` | Queue tasks for sequential execution |
-| `/spend` | Check today's spend and remaining budget |
-| `@workspace <prompt>` | Send a prompt to Claude in that project |
-| `/run <cmd>` | Run a shell command in the workspace |
-| `/status` `/diff` `/commit` `/pr` | Git workflow |
-| `/ls` `/use` `/where` | Workspace management |
-| `/dashboard` | Web launcher for all apps |
-| `/mirror start\|stop` | Android emulator in browser |
-| `/showcase <ws>` | Share a demo publicly |
-| `/fixes` `/fixes clear` | View or clear the build fix log |
-| `/memory show\|pin\|reset` | Project memory (CLAUDE.md) |
-| `/newsession` | Reset Claude session |
-| `/maintenance [msg\|off]` | Toggle maintenance mode (owner only) |
-| `/announce <msg>` | Post to announcement channel (owner only) |
-| `/setup` | Check setup status |
-| `/help` | Full command reference |
+**TestFlight** (requires Apple Developer Program, $99/yr):
+```bash
+export APPLE_TEAM_ID=your-team-id
+export ASC_KEY_ID=your-key-id
+export ASC_ISSUER_ID=your-issuer-id
+# Place .p8 at ~/.private_keys/AuthKey_<KEY_ID>.p8
+```
 
----
+**Tailscale** (optional, for remote access):
+```bash
+export TAILSCALE_HOSTNAME=100.x.x.x
+```
 
-## Developer Reference
+**Supabase** (optional, auto-provisions databases):
+```bash
+SUPABASE_PROJECT_REF=your-project-ref
+SUPABASE_MANAGEMENT_KEY=your-management-key
+SUPABASE_ANON_KEY=your-anon-key
+```
 
-Everything below is for working on the bot itself.
+</details>
 
-### Tech stack
-
-- **Python 3.10+** with **discord.py** — the bot itself (uses match/case)
-- **Claude Code CLI** — AI that writes and fixes the app code
-- **Kotlin Multiplatform + Compose Multiplatform** — one codebase, three platforms
-- **Gradle** — builds Android (APK) and Web (WASM)
-- **Xcode** — builds iOS (simulator + physical device)
-- **PM2** — keeps the bot running, auto-restarts on code changes
-- **Tailscale** — lets you access web demos and Android mirrors from your phone
-- **ws-scrcpy** (optional) — browser-based Android emulator interaction
-
-### Architecture
+## Architecture
 
 ```
 Discord DM → parser.py → bot.py → handler
-                                      ↓
-                              claude_runner.py ←→ Claude Code CLI
-                                      ↓
-                              agent_loop.py (build → error → fix → retry)
-                                      ↓
-                              platforms.py (gradle / xcodebuild / wasm)
-                                      ↓
-                              Screenshots, videos, web server, device install
+                                     ↓
+                             claude_runner.py ←→ Claude Code CLI
+                                     ↓
+                             agent_loop.py (build → error → fix → retry)
+                                     ↓
+                             platforms.py (gradle / xcodebuild / wasm)
+                                     ↓
+                             Screenshots, web server, device install
 ```
 
-Key design decisions:
-- **Claude sessions persist per workspace** — context carries over between prompts
-- **Stream-json output** — real-time progress updates in Discord as Claude works (with friendly labels)
-- **Auto-fix loop** — build errors get fed back to Claude automatically (up to 8 retries)
-- **Crash detection** — iOS demos detect crash-on-launch and auto-fix runtime errors
-- **Fix memory** — `.fixes.md` logs every error+fix per workspace; injected into future fix prompts so Claude learns from past mistakes
-- **Safety checks** — `/run` and `/runsh` have an allowlist; dangerous commands are blocked
-- **Maintenance mode** — owner can block public commands while updating the bot
+**Key design:**
+- Claude sessions persist per workspace — context carries over between prompts
+- Auto-fix loop — build errors get fed back to Claude (up to 8 retries)
+- Crash detection — iOS/Android demos detect crash-on-launch and auto-fix
+- Fix memory — every error+fix is logged and injected into future fix prompts
+- Image input — Discord image attachments are saved to the workspace and read by Claude
+- Web screenshots — Playwright captures a preview after every web build
 
-### Project structure
+<details>
+<summary><b>Project structure</b></summary>
 
 ```
 bot.py                  # Entry point — Discord client, message routing
 parser.py               # Message grammar — slash commands + @workspace prompts
 config.py               # Environment variables
 platforms.py            # Build/install/demo for Android, iOS, Web
-claude_runner.py        # Claude Code CLI invocation with session continuity
+claude_runner.py        # Claude Code CLI with session continuity + progress streaming
 agent_loop.py           # Auto-fix loop: build → error → Claude fix → rebuild
+bot_context.py          # Shared context + message splitting
 workspaces.py           # Workspace registry (JSON-backed)
-supabase_client.py      # Supabase Management API client (schema provisioning)
+supabase_client.py      # Supabase Management API client
+handlers/
+  prompt_handler.py     # Core prompt flow (images, Claude, auto-build, preview)
+  build_commands.py     # /buildapp, /demo, /platform
+  save_git_commands.py  # /save, git commands
+  workspace_commands.py # /ls, /use, /rename, /help
+  publish_commands.py   # /testflight, /playstore
+  system_commands.py    # /spend, /setup, /health, /admin
+helpers/
+  demo_runner.py        # Platform demo orchestration
+  web_screenshot.py     # Playwright headless screenshots
+  pro_tips.py           # Pro tips embed + dismiss
+  ui_helpers.py         # Help text, workspace footer
 commands/
-  buildapp.py           # /buildapp — full pipeline
-  create.py             # /create — scaffold KMP project
-  fix.py                # /fix — auto-fix build errors
-  fixes_cmd.py          # /fixes — persistent build fix log
-  widget.py             # /widget — iOS WidgetKit
-  testflight.py         # /testflight — archive + upload to TestFlight
-  dashboard.py          # /dashboard — web launcher page
-  bot_todo.py           # /bot-todo — internal todo list
-  memory_cmd.py         # /memory — project memory (CLAUDE.md)
-  queue.py              # /queue — batch task queue
-  git_cmd.py            # Git commands (/status, /diff, /commit, /pr, etc.)
-  run_cmd.py            # /run, /runsh — terminal commands
-  showcase.py           # /showcase, /tryapp — public demos
-  scrcpy.py             # /mirror — Android emulator in browser
+  create.py             # Project scaffolding + CLAUDE.md template
+  buildapp.py           # /buildapp full pipeline
+  git_cmd.py            # Git operations
+  testflight.py         # iOS TestFlight upload
+  playstore.py          # Google Play upload
+  queue.py              # Batch task queue
 templates/
-  kmp/KMPTemplate/      # KMP project template (copied for each new app)
+  kmp/KMPTemplate/      # KMP project template (copied per new app)
 ```
 
-### Adding a new command
+</details>
 
-1. **Parser** (`parser.py`): Add a case in the `match cmd:` block
-2. **Handler** (`commands/yourcommand.py`): Create the handler function
-3. **Bot routing** (`bot.py`): Add import + case in the `match cmd.name:` block
-4. **Help text** (`bot.py`): Update `help_text()` function
+## All Commands
 
-### Key patterns
-
-- **Status callbacks**: Handlers take `on_status: Callable[[str, Optional[str]], Awaitable[None]]` — first arg is message text, second is optional file path
-- **Build results**: `BuildResult(success, output, error)`, `DemoResult(success, message, screenshot_path)`, `DeployResult(success, message)`
-- **Agent loop**: `run_agent_loop()` handles the build-error-fix cycle for any platform
-- **Claude sessions**: Persist per workspace via `ClaudeRunner._sessions` dict — context carries over between prompts
-
-### Environment setup for all platforms
-
-**Android** (required):
-```bash
-# Install Android Studio → SDK Manager → install SDK + emulator
-# Create an AVD (e.g., Pixel 9 Pro XL, API 35)
-export ANDROID_AVD=Pixel_9_Pro_XL
-```
-
-**iOS** (requires macOS + Xcode):
-```bash
-sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
-sudo xcodebuild -license accept
-# Open Xcode → Settings → Platforms → install iOS simulator
-```
-
-**TestFlight** (requires Apple Developer Program, $99/year):
-```bash
-# App Store Connect → Users & Access → Integrations → API Keys
-export APPLE_TEAM_ID=your-team-id
-export ASC_KEY_ID=your-key-id
-export ASC_ISSUER_ID=your-issuer-id
-# Place .p8 file at ~/.private_keys/AuthKey_<KEY_ID>.p8
-```
-
-**Web**: Works out of the box — just needs Gradle (bundled with KMP template).
-
-**Tailscale** (optional, for remote access):
-```bash
-# Install Tailscale on your Mac and phone
-export TAILSCALE_HOSTNAME=100.x.x.x
-# Now web demos and mirror are accessible from your phone anywhere
-```
-
-## Roadmap
-
-- [x] **Game-save-style versioning** — `/save`, `/save list`, `/save undo`, `/save redo`, `/save github`
-- [x] **Android + Web crash/health detection** — auto-fix pipelines for all three platforms (logcat crash detection, HTTP health checks)
-- [ ] **Screenshot-to-UI** — upload a design mockup in Discord, bot generates matching KMP UI (Claude multimodal)
-- [ ] **Auto-preview after edits** — automatically screenshot and send after every `@workspace` prompt
-- [ ] **App template gallery** — curated starting points (social feed, e-commerce, chat, dashboard, game)
-- [ ] **Public web deploy** — `/deploy web` pushes to Netlify/Vercel/CF Pages (nice-to-have sharing link)
-- [ ] **Security scan** — `/security` checks for exposed keys, missing RLS policies, OWASP issues
-- [ ] **Data modeling interview** — conversational flow in `/buildapp` that helps non-engineers describe their data needs, then auto-provisions Supabase tables
-- [ ] **Stripe/payments integration** — auto-scaffold checkout flows for native apps
-- [ ] **Automated TestFlight tester invites** — bot adds testers via App Store Connect API
-- [ ] **Google Play internal testing** — `/deploy android play` for Android equivalent of TestFlight
-
-### Multi-user TODO
-
-Everything needed before other people can use the bot:
-
-- [x] **Multi-user workspace isolation** — each user gets their own workspace directory
-- [x] **Per-user spend tracking** — budget and cost tracking scoped per user with daily caps
-- [x] **Auto-approve onboarding** — anyone in the Discord server is automatically approved on first DM
-- [ ] **Per-user GitHub tokens** — `/save github` currently uses the host machine's `gh` auth. Each user needs their own token, stored in config/DB and passed via env to `gh` calls (or a `/save github connect <token>` flow)
-- [ ] **OAuth onboarding** — "click this link" flows for Supabase, Apple, Google, and Claude API so non-engineers don't have to copy-paste API keys
-- [ ] **LLM selection** — let users choose their LLM provider (with subscription info)
-- [ ] **Per-user Claude sessions** — isolate Claude context so one user's prompts don't leak into another's
-
-## Follow-ups
-
-These are larger directional shifts planned once the core product is validated:
-
-### 1. Multi-user and concurrency
-Move from single-user apps to apps with multiple concurrent users (think Instagram, not a personal tracker). This means Supabase Row Level Security on every table, auth flows baked into templates, realtime subscriptions for live updates, and handling concurrent writes safely (optimistic locking, conflict resolution). The goal: a non-engineer says "build me a messaging app" and gets something that actually works with multiple people — not a single-player mockup.
-
-### 2. Standalone chat UI
-Graduate from Discord to a purpose-built native app. Discord is the right MVP channel (free auth, messaging, notifications), but once real users hit Discord-specific friction ("I don't have Discord", "the UX is too noisy"), the bot moves into its own iOS/Android app with a focused chat interface. Same Claude backend, cleaner experience, App Store distribution.
-
-### 3. FastAPI service extraction
-Decouple the core pipeline from Discord so external systems can call the app builder over HTTP. Steps:
-- [ ] Extract pipeline logic (Claude runner, build loops, workspace management) into a `core/` module with no Discord imports
-- [ ] Wrap `core/` in a FastAPI server (`api/`) — endpoints for build, demo, fix, status
-- [ ] Refactor the Discord bot into a thin client that calls `core/` directly (same in-process calls, no HTTP)
-- [ ] Add auth (API key or Tailscale-only) for external callers
-- [ ] External integration: HTTP calls over Tailscale to the FastAPI endpoints
-
-### 4. Complex backend processing
-Supabase (Postgres + Edge Functions) handles most app backends without custom server code. But once generated apps need payment processing (Stripe), multi-step background workflows, third-party API orchestration, or heavy compute — that's when a dedicated backend layer (Node/Rails/serverless) gets introduced. Not before. The principle: don't add infrastructure until a real user need demands it.
+| Command | What it does |
+|---------|-------------|
+| `/buildapp <description>` | Full pipeline: scaffold → build → demo |
+| `@workspace <prompt>` | Send a prompt to Claude in that project |
+| `/demo [web\|android\|ios]` | Build + preview (default: web) |
+| `/save` | Save with auto-generated description |
+| `/save <message>` | Save with custom description |
+| `/save list` | Browse saves, restore any version |
+| `/save undo` / `redo` | Quick undo/redo |
+| `/save github` | Push to GitHub |
+| `/testflight` | Upload to iOS TestFlight |
+| `/playstore` | Upload to Google Play |
+| `/ls` | List and switch workspaces |
+| `/use <name>` | Switch workspace |
+| `/rename <new name>` | Rename current workspace |
+| `/remove <name>` | Delete a workspace |
+| `/spend` | Daily budget and usage |
+| `/platform [web\|ios\|android]` | Set default demo platform |
+| `/status` `/diff` `/commit` `/log` `/pr` | Git workflow |
+| `/run <cmd>` | Run shell command in workspace |
+| `/collaborate <ws> <name> <email>` | Invite collaborator |
+| `/maintenance [msg\|off]` | Toggle maintenance mode |
+| `/help` | Full command reference |
 
 ## License
 

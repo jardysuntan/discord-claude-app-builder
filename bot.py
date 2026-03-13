@@ -112,8 +112,16 @@ async def on_message(message: discord.Message):
             return
 
     text = message.content.strip()
-    if not text:
+    has_images = any(
+        att.filename.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"))
+        for att in message.attachments
+    )
+    if not text and not has_images:
         return
+
+    # Image-only message: treat as a prompt describing the image
+    if not text and has_images:
+        text = "Look at the attached image(s) and describe what you see. If it looks like a bug or UI issue, suggest how to fix it."
 
     parsed = msg_parser.parse(text)
     channel = message.channel
@@ -155,7 +163,7 @@ async def on_message(message: discord.Message):
 
     # ── Claude prompts ───────────────────────────────────────────────────
     if isinstance(parsed, (WorkspacePrompt, FallbackPrompt)):
-        await handle_prompt(ctx, parsed, channel, user_id, is_admin)
+        await handle_prompt(ctx, parsed, channel, user_id, is_admin, attachments=message.attachments)
         return
 
     # ── Commands ─────────────────────────────────────────────────────────
