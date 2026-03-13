@@ -24,6 +24,25 @@ from allowlist import Allowlist
 STILL_LISTENING = "\U0001f4a1 *I'm still listening \u2014 feel free to send other commands while this runs.*"
 
 
+def _split_message(text: str, limit: int) -> list[str]:
+    """Split *text* into chunks of at most *limit* chars, breaking at newlines."""
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    while text:
+        if len(text) <= limit:
+            chunks.append(text)
+            break
+        # Find last newline within the limit
+        split_at = text.rfind("\n", 0, limit)
+        if split_at <= 0:
+            # No newline found — hard-split at limit
+            split_at = limit
+        chunks.append(text[:split_at])
+        text = text[split_at:].lstrip("\n")
+    return chunks
+
+
 # ── Context dataclass ────────────────────────────────────────────────────────
 
 @dataclass
@@ -49,13 +68,38 @@ class BotContext:
     # ── Helpers ──────────────────────────────────────────────────────────
 
     async def send(self, channel, text: str, file_path: str | None = None):
-        """Send a message to *channel*, truncating if needed.
+        """Send a message to *channel*, splitting into chunks if needed.
 
+        - Messages ≤ 1900 chars: sent as-is.
+        - Messages > 1900 chars: split at newline boundaries into multiple messages.
+        - Messages > 12000 chars: first chunk sent as text, full response attached as .txt file.
         Optionally attaches a file when *file_path* points to an existing path.
         """
-        if len(text) > config.MAX_DISCORD_MSG_LEN:
-            text = text[: config.MAX_DISCORD_MSG_LEN] + "\n\u2026(truncated)"
-        kwargs: dict = {"content": text}
-        if file_path and Path(file_path).exists():
-            kwargs["file"] = discord.File(file_path)
-        await channel.send(**kwargs)
+        limit = config.MAX_DISCORD_MSG_LEN
+        attach_file = file_path and Path(file_path).exists()
+
+        if len(text) <= limit:
+            kwargs: dict = {"content": text}
+            if attach_file:
+                kwargs["file"] = discord.File(file_path)
+            await channel.send(**kwargs)
+            return
+
+        # Very long output: attach as file
+        txt_file = None
+        if len(text) > 12000:
+            import io
+            txt_file = discord.File(
+                io.BytesIO(text.encode()), filename="full_response.txt"
+            )
+
+        # Split into chunks at newline boundaries
+        chunks = _split_message(text, limit)
+        for i, chunk in enumerate(chunks):
+            kwargs = {"content": chunk}
+            is_last = i == len(chunks) - 1
+            if is_last and txt_file:
+                kwargs["file"] = txt_file
+            elif is_last and attach_file:
+                kwargs["file"] = discord.File(file_path)
+            await channel.send(**kwargs)

@@ -32,6 +32,8 @@ def help_text(is_admin: bool = True):
         "",
         "**Tools:**",
         "`/spend` — daily budget",
+        "",
+        "-# Discord limits messages to 2000 characters. For longer prompts, split across multiple messages.",
     ]
     if is_admin:
         lines += [
