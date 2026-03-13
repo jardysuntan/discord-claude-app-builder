@@ -37,6 +37,16 @@ def pro_tips_embed() -> discord.Embed:
         inline=False,
     )
     embed.add_field(
+        name="Your app has a live database",
+        value=(
+            "Use `/data template` to get CSV templates, fill them in with "
+            "Google Sheets, then `/data import` to bulk-load rows. "
+            "`/data export` to download everything. "
+            "You can also just ask the bot to add or update data for you \u2014 no CSV needed."
+        ),
+        inline=False,
+    )
+    embed.add_field(
         name="Start with web",
         value=(
             "Use `/demo web` for quick iteration. Once happy, run "

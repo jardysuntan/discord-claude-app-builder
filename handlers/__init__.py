@@ -16,6 +16,7 @@ from handlers import (
     save_git_commands,
     admin_commands,
     system_commands,
+    data_commands,
 )
 
 COMMAND_HANDLERS = {
@@ -25,4 +26,5 @@ COMMAND_HANDLERS = {
     **save_git_commands.HANDLERS,
     **admin_commands.HANDLERS,
     **system_commands.HANDLERS,
+    **data_commands.HANDLERS,
 }

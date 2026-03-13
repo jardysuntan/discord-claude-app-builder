@@ -41,6 +41,33 @@ async def run_sql(sql: str) -> tuple[bool, str]:
         return (False, f"Unexpected error: {e}")
 
 
+async def query_sql(sql: str) -> tuple[bool, list[dict] | str]:
+    """Execute SQL and return rows. Returns (True, [rows]) or (False, error)."""
+    url = f"https://api.supabase.com/v1/projects/{config.SUPABASE_PROJECT_REF}/database/query"
+    headers = {
+        "Authorization": f"Bearer {config.SUPABASE_MANAGEMENT_KEY}",
+        "Content-Type": "application/json",
+    }
+    body = {"query": sql}
+
+    try:
+        async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
+            async with session.post(url, headers=headers, json=body) as resp:
+                text = await resp.text()
+                if resp.status in (200, 201):
+                    import json
+                    data = json.loads(text)
+                    # API returns a list of result sets; take the first one
+                    if isinstance(data, list) and data:
+                        return (True, data)
+                    return (True, data if isinstance(data, list) else [])
+                return (False, f"HTTP {resp.status}: {text[:300]}")
+    except aiohttp.ClientError as e:
+        return (False, f"Request failed: {e}")
+    except Exception as e:
+        return (False, f"Unexpected error: {e}")
+
+
 def extract_sql(text: str) -> Optional[str]:
     """Extract SQL from Claude's markdown response (between ```sql and ``` markers)."""
     match = re.search(r"```sql\s*\n(.*?)```", text, re.DOTALL)

@@ -62,6 +62,7 @@ class BotContext:
     # Ephemeral per-session state
     interview_pending: set = field(default_factory=set)          # set of (channel_id, user_id)
     awaiting_json_upload: dict = field(default_factory=dict)     # user_id -> (ws_key, ws_path, checklist_msg)
+    awaiting_csv_upload: dict = field(default_factory=dict)      # user_id -> (ws_key, ws_path)
 
     start_time: float = 0.0
 

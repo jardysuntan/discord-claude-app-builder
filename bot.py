@@ -111,6 +111,15 @@ async def on_message(message: discord.Message):
             await ctx.send(message.channel, f"✅ Service account key saved for **{ws_key}**.")
             return
 
+    # ── CSV data import upload ────────────────────────────────────
+    if uid in ctx.awaiting_csv_upload and message.attachments:
+        att = next((a for a in message.attachments if a.filename.lower().endswith(".csv")), None)
+        if att:
+            ws_key, ws_path = ctx.awaiting_csv_upload.pop(uid)
+            from handlers.data_commands import _process_csv_import
+            await _process_csv_import(ctx, message.channel, ws_path, att)
+            return
+
     text = message.content.strip()
     has_images = any(
         att.filename.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"))

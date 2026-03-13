@@ -149,6 +149,13 @@ def parse(text: str) -> ParseResult:
             case "/done":
                 return Command(name="done")
 
+            # ── Data ──────────────────────────────────────────────────
+            case "/data":
+                data_parts = rest.split(None, 1) if rest else []
+                sub = data_parts[0].lower() if data_parts else None
+                arg = data_parts[1] if len(data_parts) > 1 else None
+                return Command(name="data", sub=sub, arg=arg)
+
             # ── Spend ─────────────────────────────────────────────────
             case "/spend":
                 return Command(name="spend")
