@@ -654,21 +654,52 @@ async def handle_save_redo(ws_path: str) -> str:
 async def handle_save_github(ws_path: str, ws_key: str) -> str:
     """Create a private GitHub repo for the workspace, or show existing URL."""
     # Check if remote already exists
-    _, remote = await _git(["remote", "get-url", "origin"], ws_path)
-    if remote.strip():
-        return f"✅ Already on GitHub!\n👉 {remote.strip()}"
+    rc, remote = await _git(["remote", "get-url", "origin"], ws_path)
+    if rc == 0 and remote.strip():
+        # Convert SSH URL to HTTPS so it's clickable + pushable
+        url = remote.strip()
+        if url.startswith("git@github.com:"):
+            https = "https://github.com/" + url[len("git@github.com:"):].removesuffix(".git")
+            await _git(["remote", "set-url", "origin", f"{https}.git"], ws_path)
+            url = https
+        else:
+            url = url.removesuffix(".git")
+        # Ensure code is actually pushed (covers previous SSH failures)
+        await _git(["push", "-u", "origin", "HEAD"], ws_path, timeout=30)
+        await _git(["push", "--tags"], ws_path, timeout=15)
+        return f"✅ Already on GitHub!\n👉 {url}"
 
     ok, msg = await ensure_git_repo(ws_path)
     if not ok:
         return f"❌ {msg}"
 
+    # Get GitHub username for the HTTPS remote URL
+    _, gh_user = await _gh(["api", "user", "-q", ".login"], ws_path, timeout=10)
+    gh_user = gh_user.strip()
+    if not gh_user:
+        return "❌ Could not determine GitHub username. Is `gh` authenticated?"
+
+    repo_name = ws_key
+    https_url = f"https://github.com/{gh_user}/{repo_name}"
+
+    # Try to create the repo (may already exist from a previous failed attempt)
     rc, out = await _gh(
-        ["repo", "create", ws_key, "--private", "--source", ".", "--push"],
+        ["repo", "create", repo_name, "--private"],
         ws_path, timeout=30,
     )
-    if rc == 0:
-        # Push tags too so saves show up
-        await _git(["push", "--tags"], ws_path, timeout=15)
-        url = out.strip().splitlines()[-1] if out.strip() else ""
-        return f"✅ **Uploaded to GitHub!** (private repo)\n👉 {url}"
-    return f"❌ GitHub setup failed:\n```\n{out[:500]}\n```"
+    # rc != 0 is OK if repo already exists
+
+    # Set up remote (remove stale one if present, then add HTTPS)
+    await _git(["remote", "remove", "origin"], ws_path)
+    await _git(["remote", "add", "origin", f"{https_url}.git"], ws_path)
+
+    # Push code + tags
+    rc, out = await _git(["push", "-u", "origin", "main"], ws_path, timeout=30)
+    if rc != 0:
+        # Try default branch name "master" as fallback
+        rc, out = await _git(["push", "-u", "origin", "HEAD"], ws_path, timeout=30)
+    if rc != 0:
+        return f"❌ Repo created but push failed:\n```\n{out[:500]}\n```"
+
+    await _git(["push", "--tags"], ws_path, timeout=15)
+    return f"✅ **Uploaded to GitHub!** (private repo)\n👉 {https_url}"
