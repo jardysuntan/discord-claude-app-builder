@@ -22,6 +22,7 @@ from handlers import COMMAND_HANDLERS
 from handlers.prompt_handler import handle_prompt
 from handlers.public_commands import HANDLERS as PUBLIC_HANDLERS
 from helpers.ui_helpers import send_workspace_footer
+from helpers.welcome import welcome_embed, WelcomeView
 from commands.playstore_state import PlayStoreState
 from views.playstore_views import PlayStoreChecklistView, _playstore_checklist_embed
 
@@ -79,6 +80,17 @@ async def on_ready():
             print(f"  Announced to {owner.display_name}")
     except Exception as e:
         print(f"  ⚠️ Could not DM owner: {e}")
+
+
+@client.event
+async def on_member_join(member: discord.Member):
+    if member.bot:
+        return
+    try:
+        dm = await member.create_dm()
+        await dm.send(embed=welcome_embed(), view=WelcomeView())
+    except Exception as e:
+        print(f"  ⚠️ Could not DM new member {member}: {e}")
 
 
 @client.event
@@ -162,11 +174,6 @@ async def on_message(message: discord.Message):
             display = message.author.display_name
             allowlist.add(user_id, display)
             is_allowed = True
-            await ctx.send(
-                channel,
-                f"👋 Welcome **{display}**! You've been automatically approved.\n"
-                "Send `/help` to see what I can do.",
-            )
         else:
             return
 

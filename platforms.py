@@ -832,7 +832,75 @@ class WebPlatform:
             await asyncio.sleep(0.5)
 
     @staticmethod
-    async def serve(workspace_path: str) -> Optional[str]:
+    async def deploy(dist_dir: Path, workspace_key: str) -> Optional[str]:
+        """Deploy static files to Cloudflare Pages. Returns the pages.dev URL or None."""
+        if not config.CLOUDFLARE_API_TOKEN or not config.CLOUDFLARE_ACCOUNT_ID:
+            return None
+
+        # Sanitize workspace key for CF project name (lowercase, alphanumeric + hyphens)
+        project = re.sub(r"[^a-z0-9-]", "-", workspace_key.lower()).strip("-")
+        if not project:
+            return None
+
+        # Write _headers file for COOP/COEP (required for Kotlin/WASM SharedArrayBuffer)
+        headers_file = dist_dir / "_headers"
+        headers_file.write_text(
+            "/*\n"
+            "  Cross-Origin-Opener-Policy: same-origin\n"
+            "  Cross-Origin-Embedder-Policy: credentialless\n"
+        )
+
+        env = {
+            **os.environ,
+            "CLOUDFLARE_API_TOKEN": config.CLOUDFLARE_API_TOKEN,
+            "CLOUDFLARE_ACCOUNT_ID": config.CLOUDFLARE_ACCOUNT_ID,
+        }
+
+        # Ensure the Pages project exists (idempotent — fails silently if already created)
+        create_proc = await asyncio.create_subprocess_exec(
+            "npx", "wrangler", "pages", "project", "create", project,
+            "--production-branch=main",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        await asyncio.wait_for(create_proc.communicate(), timeout=30)
+
+        proc = await asyncio.create_subprocess_exec(
+            "npx", "wrangler", "pages", "deploy", str(dist_dir),
+            f"--project-name={project}",
+            "--commit-dirty=true",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        try:
+            out_bytes, err_bytes = await asyncio.wait_for(proc.communicate(), timeout=120)
+        except asyncio.TimeoutError:
+            proc.kill()
+            return None
+        out = out_bytes.decode(errors="replace")
+        err = err_bytes.decode(errors="replace")
+        combined = out + err
+
+        if proc.returncode != 0:
+            # Log so we can diagnose — caller will fall back to tunnel
+            msg = f"[CF Pages] deploy failed (rc={proc.returncode}): {combined[:500]}"
+            print(msg)
+            import logging
+            logging.warning(msg)
+            return None
+
+        # Parse deployment URL from wrangler output
+        m = re.search(r"https://[a-z0-9-]+\.[a-z0-9-]+\.pages\.dev", combined)
+        if m:
+            # Return the stable project URL, not the per-deploy hash URL
+            return f"https://{project}.pages.dev"
+        # If we can't parse but deploy succeeded, return the expected URL
+        return f"https://{project}.pages.dev"
+
+    @staticmethod
+    async def serve(workspace_path: str, workspace_key: str = "") -> Optional[str]:
         """Start a simple HTTP server for the built web app."""
         global _web_server_proc, _tunnel_proc
 
@@ -864,7 +932,13 @@ class WebPlatform:
         )
         await asyncio.sleep(1)
 
-        # Try to start a Cloudflare Tunnel for a public URL
+        # Try Cloudflare Pages deploy for a persistent URL
+        if workspace_key:
+            pages_url = await WebPlatform.deploy(dist_dir, workspace_key)
+            if pages_url:
+                return pages_url
+
+        # Fallback: try cloudflared quick tunnel
         public_url = await WebPlatform._start_tunnel()
         if public_url:
             return public_url
@@ -957,11 +1031,11 @@ class WebPlatform:
             return str(e)
 
     @staticmethod
-    async def full_demo(workspace_path: str) -> DemoResult:
+    async def full_demo(workspace_path: str, workspace_key: str = "") -> DemoResult:
         result = await WebPlatform.build(workspace_path)
         if not result.success:
             return DemoResult(success=False, message=f"❌ Web build failed:\n```\n{result.error[:800]}\n```")
-        url = await WebPlatform.serve(workspace_path)
+        url = await WebPlatform.serve(workspace_path, workspace_key)
         if not url:
             return DemoResult(success=False, message="❌ Built but could not find distribution directory.")
         return DemoResult(

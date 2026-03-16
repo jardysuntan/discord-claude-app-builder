@@ -22,7 +22,7 @@ from agent_loop import run_agent_loop, format_loop_summary
 from supabase_client import snapshot_sql_files, detect_changed_sql, sync_sql_files
 from views.interview_views import CancelRequestView
 from helpers.ui_helpers import send_workspace_footer
-from helpers.pro_tips import pro_tips_embed, ProTipsDismissView
+from helpers.pro_tips import pro_tip_embed, ProTipsDismissView, TIPS
 from helpers.web_screenshot import take_web_screenshot
 
 if TYPE_CHECKING:
@@ -176,7 +176,7 @@ async def handle_prompt(
         await ctx.send(channel, "🌐 Auto-building web...")
         web_result = await build_platform("web", ws_path)
         if web_result.success:
-            url = await WebPlatform.serve(ws_path)
+            url = await WebPlatform.serve(ws_path, ws_key)
             if url:
                 await ctx.send(channel, f"✅ Web build succeeded → {url}")
                 shot = await take_web_screenshot(f"http://localhost:{config.WEB_SERVE_PORT}")
@@ -206,7 +206,7 @@ async def handle_prompt(
             summary = format_loop_summary(fix_result)
             await ctx.send(channel, summary)
             if fix_result.success:
-                url = await WebPlatform.serve(ws_path)
+                url = await WebPlatform.serve(ws_path, ws_key)
                 if url:
                     await ctx.send(channel, f"✅ Web fixed → {url}")
                     shot = await take_web_screenshot(f"http://localhost:{config.WEB_SERVE_PORT}")
@@ -252,5 +252,7 @@ async def handle_prompt(
     await send_workspace_footer(ctx, channel, user_id, is_admin=is_admin)
 
     if ctx.registry.show_tips(user_id):
+        tip_index = ctx.registry.get_tip_index(user_id)
         view = ProTipsDismissView(ctx, user_id)
-        await channel.send(embed=pro_tips_embed(), view=view)
+        await channel.send(embed=pro_tip_embed(tip_index), view=view)
+        ctx.registry.advance_tip(user_id, total_tips=len(TIPS))

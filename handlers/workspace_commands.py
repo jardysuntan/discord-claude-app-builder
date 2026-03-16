@@ -12,7 +12,8 @@ import discord
 import config
 from commands.create import create_kmp_project
 from helpers.ui_helpers import help_text
-from helpers.pro_tips import pro_tips_embed
+from helpers.pro_tips import all_pro_tips_embed
+from helpers.welcome import welcome_embed, WelcomeView
 from views.workspace_views import ConfirmDeleteView, WorkspaceSelectorView
 
 if TYPE_CHECKING:
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
 
 async def handle_help(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
     await ctx.send(channel, help_text(is_admin))
-    await channel.send(embed=pro_tips_embed())
+    await channel.send(embed=all_pro_tips_embed())
 
 
 async def handle_ls(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
@@ -120,8 +121,34 @@ async def handle_deleteapp(ctx: BotContext, cmd: Command, channel, user_id: int,
             )
 
 
+async def handle_testnewuser(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
+    if not is_admin:
+        await ctx.send(channel, "Admin only.")
+        return
+
+    # Reset tip state so next prompts show rotating tips
+    ctx.registry.reset_tips(user_id)
+
+    # Welcome embed + button
+    await channel.send(embed=welcome_embed(), view=WelcomeView())
+
+    # Invite email preview
+    from pathlib import Path
+    template_path = Path(__file__).parent.parent / "templates" / "invite_email.md"
+    email_body = template_path.read_text()
+    rendered = email_body.replace("{name}", "Alex").replace("{invite_url}", "https://discord.gg/example")
+    await channel.send(embed=discord.Embed(
+        title="Invite Email Preview",
+        description=rendered,
+        color=0x57F287,
+    ))
+
+    await ctx.send(channel, "Onboarding previewed. Your next 5 prompts will show rotating tips.")
+
+
 HANDLERS = {
     "help": handle_help,
     "ls": handle_ls,
     "deleteapp": handle_deleteapp,
+    "testnewuser": handle_testnewuser,
 }

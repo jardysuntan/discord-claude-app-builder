@@ -16,6 +16,7 @@ class WorkspaceRegistry:
         self._user_defaults: dict[int, str] = {}
         self._user_platforms: dict[int, str] = {}
         self._user_tips_hidden: set[int] = set()
+        self._user_tip_index: dict[int, int] = {}
         self._defaults_path = Path(config.WORKSPACES_PATH).parent / "user_defaults.json"
         self._platforms_path = Path(config.WORKSPACES_PATH).parent / "user_platforms.json"
         self._tips_path = Path(config.WORKSPACES_PATH).parent / "user_tips.json"
@@ -46,14 +47,25 @@ class WorkspaceRegistry:
                 self._user_platforms = {int(k): v for k, v in raw.items()}
             except (json.JSONDecodeError, ValueError):
                 self._user_platforms = {}
-        # Load persisted tips preferences
+        # Load persisted tips preferences (backward-compat: old format was a plain list)
         if self._tips_path.exists():
             try:
                 with open(self._tips_path) as f:
                     raw = json.load(f)
-                self._user_tips_hidden = {int(uid) for uid in raw}
+                if isinstance(raw, list):
+                    # Legacy format: [user_id, ...]
+                    self._user_tips_hidden = {int(uid) for uid in raw}
+                    self._user_tip_index = {}
+                elif isinstance(raw, dict):
+                    # New format: {"hidden": [...], "index": {"user_id": N}}
+                    self._user_tips_hidden = {int(uid) for uid in raw.get("hidden", [])}
+                    self._user_tip_index = {int(k): v for k, v in raw.get("index", {}).items()}
+                else:
+                    self._user_tips_hidden = set()
+                    self._user_tip_index = {}
             except (json.JSONDecodeError, ValueError):
                 self._user_tips_hidden = set()
+                self._user_tip_index = {}
 
     def _migrate(self, raw: dict) -> dict[str, dict]:
         """Auto-migrate legacy string values to {path, owner_id} dicts."""
@@ -222,6 +234,12 @@ class WorkspaceRegistry:
         with open(self._platforms_path, "w") as f:
             json.dump({str(k): v for k, v in self._user_platforms.items()}, f, indent=2)
 
+    def reset_tips(self, user_id: int):
+        """Unhide tips and reset tip index to 0 — makes the user see the full onboarding cycle."""
+        self._user_tips_hidden.discard(user_id)
+        self._user_tip_index.pop(user_id, None)
+        self._save_tips()
+
     def hide_tips(self, user_id: int):
         self._user_tips_hidden.add(user_id)
         self._save_tips()
@@ -230,6 +248,23 @@ class WorkspaceRegistry:
         """Returns True if tips should be shown (default)."""
         return user_id not in self._user_tips_hidden
 
+    def get_tip_index(self, user_id: int) -> int:
+        return self._user_tip_index.get(user_id, 0)
+
+    def advance_tip(self, user_id: int, total_tips: int = 5):
+        """Increment tip index. Auto-hides tips after cycling through all."""
+        idx = self._user_tip_index.get(user_id, 0) + 1
+        if idx >= total_tips:
+            self._user_tips_hidden.add(user_id)
+            self._user_tip_index.pop(user_id, None)
+        else:
+            self._user_tip_index[user_id] = idx
+        self._save_tips()
+
     def _save_tips(self):
+        data = {
+            "hidden": list(self._user_tips_hidden),
+            "index": {str(k): v for k, v in self._user_tip_index.items()},
+        }
         with open(self._tips_path, "w") as f:
-            json.dump(list(self._user_tips_hidden), f)
+            json.dump(data, f)

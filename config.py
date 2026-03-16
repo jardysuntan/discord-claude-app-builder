@@ -60,6 +60,10 @@ WEB_SERVE_PORT: int = int(os.getenv("WEB_SERVE_PORT", "9000"))
 DASHBOARD_PORT: int = int(os.getenv("DASHBOARD_PORT", "9001"))
 TAILSCALE_HOSTNAME: str = os.getenv("TAILSCALE_HOSTNAME", "")
 
+# ── Cloudflare Pages ─────────────────────────────────────────────────────
+CLOUDFLARE_API_TOKEN: str = os.getenv("CLOUDFLARE_API_TOKEN", "")
+CLOUDFLARE_ACCOUNT_ID: str = os.getenv("CLOUDFLARE_ACCOUNT_ID", "")
+
 # ── KMP Scaffolding ─────────────────────────────────────────────────────────
 KMP_PACKAGE_PREFIX: str = os.getenv("KMP_PACKAGE_PREFIX", "com.jaredtan")
 TEMPLATE_OLD_PKG: str = os.getenv("TEMPLATE_OLD_PKG", "com.jaredtan.kmptemplate")
@@ -111,3 +115,4 @@ def print_config_summary():
     print(f"  TestFlight:      {'configured' if APPLE_TEAM_ID and ASC_KEY_ID else 'not configured'}")
     print(f"  Play Store:      {'configured' if PLAY_JSON_KEY_PATH else 'not configured'}")
     print(f"  Supabase:        {'configured' if SUPABASE_PROJECT_REF and SUPABASE_MANAGEMENT_KEY else 'not configured'}")
+    print(f"  CF Pages:        {'configured' if CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID else 'not configured'}")

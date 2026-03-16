@@ -296,7 +296,7 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str):
             pass  # auto-fix failed, already reported
         else:
             await ctx.send(channel, "Build succeeded. Starting web server...")
-            url = await WebPlatform.serve(ws_path)
+            url = await WebPlatform.serve(ws_path, ws_key)
             if not url:
                 await ctx.send(channel, "❌ Built but could not find distribution directory.")
             else:
@@ -334,7 +334,7 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str):
                             await ctx.send(channel, f"❌ Rebuild failed:\n```\n{rebuild.error[:800]}\n```")
                             break
 
-                        url = await WebPlatform.serve(ws_path)
+                        url = await WebPlatform.serve(ws_path, ws_key)
                         if not url:
                             await ctx.send(channel, "❌ Could not find distribution directory after rebuild.")
                             break

@@ -41,7 +41,7 @@ async def run_sql(sql: str) -> tuple[bool, str]:
         return (False, f"Unexpected error: {e}")
 
 
-async def query_sql(sql: str) -> tuple[bool, list[dict] | str]:
+async def query_sql(sql: str):
     """Execute SQL and return rows. Returns (True, [rows]) or (False, error)."""
     url = f"https://api.supabase.com/v1/projects/{config.SUPABASE_PROJECT_REF}/database/query"
     headers = {
