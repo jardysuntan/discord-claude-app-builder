@@ -12,6 +12,7 @@ This __init__ merges them into a single COMMAND_HANDLERS dict.
 from handlers import (
     workspace_commands,
     build_commands,
+    plan_commands,
     publish_commands,
     save_git_commands,
     admin_commands,
@@ -22,6 +23,7 @@ from handlers import (
 COMMAND_HANDLERS = {
     **workspace_commands.HANDLERS,
     **build_commands.HANDLERS,
+    **plan_commands.HANDLERS,
     **publish_commands.HANDLERS,
     **save_git_commands.HANDLERS,
     **admin_commands.HANDLERS,
