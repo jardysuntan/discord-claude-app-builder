@@ -276,7 +276,7 @@ async def handle_buildapp(
 
     web_demo_url = None
     if web_loop.success:
-        url = await WebPlatform.serve(ws_path)
+        url = await WebPlatform.serve(ws_path, workspace_key=slug)
         if url:
             web_demo_url = url
             await on_status(

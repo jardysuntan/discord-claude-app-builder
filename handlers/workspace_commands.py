@@ -146,9 +146,101 @@ async def handle_testnewuser(ctx: BotContext, cmd: Command, channel, user_id: in
     await ctx.send(channel, "Onboarding previewed. Your next 5 prompts will show rotating tips.")
 
 
+async def handle_testpublish(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
+    if not is_admin:
+        await ctx.send(channel, "Admin only.")
+        return
+
+    from commands.playstore_state import PlayStoreState
+    from views.testflight_views import _testflight_setup_embed, _testflight_success_embed
+    from views.playstore_views import (
+        _playstore_checklist_embed, _playstore_success_embed,
+    )
+
+    # Placeholder values
+    ws_key = "my-app"
+    app_name = "My App"
+    bundle_id = "com.jaredtan.myapp"
+    package_name = "com.jaredtan.myapp"
+
+    # ── TestFlight ────────────────────────────────────────────────
+    await ctx.send(channel, "**TestFlight — what a non-admin user sees:**")
+
+    # Setup embed (non-admin variant) with disabled buttons
+    embed = discord.Embed(
+        title="\U0001f4f2 One-time setup needed",
+        description=(
+            f"**{app_name}** needs to be registered with Apple before uploading.\n\n"
+            "The admin has been notified and will set it up shortly.\n"
+            "Tap **Retry** once they confirm it's done."
+        ),
+        color=0xFF9500,
+    )
+    view = discord.ui.View(timeout=1)
+    btn1 = discord.ui.Button(label="Change Name & Retry", style=discord.ButtonStyle.primary, emoji="✏️", disabled=True)
+    btn2 = discord.ui.Button(label="Retry", style=discord.ButtonStyle.secondary, emoji="🔄", disabled=True)
+    view.add_item(btn1)
+    view.add_item(btn2)
+    await channel.send(embed=embed, view=view)
+
+    # Status messages
+    status_msgs = [
+        "📱 Configuring iOS... bundle: com.jaredtan.myapp · build #20260316",
+        "🔨 Archiving... (this takes a few minutes)",
+        "📦 Exporting IPA...",
+        "✅ Validation passed",
+        "🚀 Uploading to App Store Connect...",
+    ]
+    for msg in status_msgs:
+        await ctx.send(channel, msg)
+
+    # Success embed
+    await channel.send(embed=_testflight_success_embed(ws_key, bundle_id))
+
+    # ── Play Store ────────────────────────────────────────────────
+    await ctx.send(channel, "**Play Store — what a non-admin user sees:**")
+
+    # Checklist embed (fresh state) with disabled buttons
+    fresh_state = PlayStoreState()
+    checklist_embed = _playstore_checklist_embed(ws_key, app_name, package_name, fresh_state)
+    checklist_view = discord.ui.View(timeout=1)
+    checklist_view.add_item(discord.ui.Button(label="I have a dev account", style=discord.ButtonStyle.success, disabled=True))
+    checklist_view.add_item(discord.ui.Button(label="App created", style=discord.ButtonStyle.success, disabled=True))
+    checklist_view.add_item(discord.ui.Button(label="Upload JSON Key", style=discord.ButtonStyle.primary, disabled=True))
+    checklist_view.add_item(discord.ui.Button(
+        label="Open Play Console", style=discord.ButtonStyle.link,
+        url="https://play.google.com/console", emoji="🔗",
+    ))
+    await channel.send(embed=checklist_embed, view=checklist_view)
+
+    # Status messages
+    ps_status_msgs = [
+        "🤖 Configuring Android... package: com.jaredtan.myapp · version 1.0 (20260316)",
+        "🔨 Building release AAB... (this takes a few minutes)",
+        "🚀 Uploading to Google Play...",
+    ]
+    for msg in ps_status_msgs:
+        await ctx.send(channel, msg)
+
+    # Success embed
+    await channel.send(embed=_playstore_success_embed(ws_key, package_name))
+
+    # First-upload email view (disabled)
+    email_view = discord.ui.View(timeout=1)
+    email_view.add_item(discord.ui.Button(label="Enter email", style=discord.ButtonStyle.primary, emoji="📧", disabled=True))
+    await channel.send(
+        "📧 **Enter your email** to receive the AAB file, then upload it to Play Console.\n"
+        "*(This is only needed for the first upload — future uploads are automatic)*",
+        view=email_view,
+    )
+
+    await ctx.send(channel, "✅ Preview complete.")
+
+
 HANDLERS = {
     "help": handle_help,
     "ls": handle_ls,
     "deleteapp": handle_deleteapp,
     "testnewuser": handle_testnewuser,
+    "testpublish": handle_testpublish,
 }

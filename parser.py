@@ -193,6 +193,8 @@ def parse(text: str) -> ParseResult:
                 return Command(name="announce", raw_cmd=rest or None)
             case "/testnewuser":
                 return Command(name="testnewuser")
+            case "/testpublish":
+                return Command(name="testpublish")
             case _:
                 return Command(name="unknown", raw_cmd=text)
 
