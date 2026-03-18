@@ -14,6 +14,7 @@ def help_text(is_admin: bool = True):
     lines = [
         "**discord-claude-bridge** — build apps from chat" + agent + "\n",
         "**Build & Preview:**",
+        "`/planapp` — plan your app first (screens, data model, features)",
         "`/build app <description>` — idea \u2192 running app",
         "`/demo` — build + preview your app",
         "`/testflight` — when happy, publish to TestFlight (iOS). Ping `jared.e.tan@gmail.com` for setup.",

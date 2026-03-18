@@ -66,6 +66,9 @@ def parse(text: str) -> ParseResult:
             case "/buildapp" | "/build-app":
                 return Command(name="buildapp", raw_cmd=rest or None)
 
+            case "/planapp" | "/plan-app" | "/plan":
+                return Command(name="planapp", raw_cmd=rest or None)
+
             case "/build":
                 # "/build app <desc>" is an alias for "/buildapp <desc>"
                 if rest and rest.lower().startswith("app"):
