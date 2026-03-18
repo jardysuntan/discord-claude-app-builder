@@ -1,9 +1,10 @@
 """
 playstore_views.py — Play Store checklist and related views/embeds.
 
-Classes: PlayStoreChecklistView, _ChecklistButton, _EmailModal,
-         _InviteLinkModal, _EmailAABView
-Functions: _playstore_checklist_embed, _playstore_success_embed
+Classes: PlayStoreChecklistView, PlayStoreSetupView, _ChecklistButton,
+         _EmailModal, _InviteLinkModal, _EmailAABView
+Functions: _playstore_checklist_embed, _playstore_setup_embed,
+           _playstore_success_embed, _notify_admin_playstore
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from typing import TYPE_CHECKING
 
 import discord
 
+import config
 from commands.playstore import handle_playstore
 from commands.playstore_state import PlayStoreState
 
@@ -439,3 +441,133 @@ def _playstore_success_embed(workspace_key: str, package_name: str) -> discord.E
         inline=False,
     )
     return embed
+
+
+# ── Non-admin setup flow (mirrors testflight_views.py pattern) ────────────
+
+
+async def _notify_admin_playstore(
+    ctx: BotContext, requester_id: int, app_name: str, package_name: str,
+):
+    """DM the admin to set up Play Store API access."""
+    admin_id = config.DISCORD_ALLOWED_USER_ID
+    if requester_id == admin_id:
+        return  # admin is the requester
+    try:
+        admin = await ctx.client.fetch_user(admin_id)
+        if admin:
+            await admin.send(
+                f"\U0001f4f2 **Play Store setup needed**\n\n"
+                f"<@{requester_id}> is trying to upload **{app_name}** to Google Play "
+                f"but it's not set up yet.\n\n"
+                f"**Package:** `{package_name}`\n"
+                f"**Play Console:** https://play.google.com/console\n\n"
+                f"1. Create the app in Play Console (if not already)\n"
+                f"2. Set up API access (service account + JSON key)\n"
+                f"3. Upload the JSON key via `/playstore`\n\n"
+                f"Once done, they can tap **Retry** in the channel."
+            )
+    except Exception:
+        pass  # don't block the flow if DM fails
+
+
+def _playstore_setup_embed(
+    is_admin: bool, app_name: str, package_name: str,
+) -> discord.Embed:
+    """Build the embed for when no Play Store key is configured."""
+    if is_admin:
+        description = (
+            f"No API key found for **{app_name}** (`{package_name}`).\n\n"
+            "Set up API access:\n"
+            "1. [Open Google Cloud Console](https://console.cloud.google.com) \u2192 "
+            "**New Project** \u2192 name it anything\n"
+            "2. Search **\"Google Play Android Developer API\"** \u2192 **Enable**\n"
+            "3. **IAM & Admin \u2192 Service Accounts \u2192 Create Service Account**\n"
+            "4. Click into it \u2192 **Keys** tab \u2192 **Add Key \u2192 JSON** \u2192 "
+            "downloads a `.json` file\n"
+            "5. [Play Console \u2192 Users](https://play.google.com/console/users-and-permissions) "
+            "\u2192 **Invite** the service account email \u2192 give **Admin** access\n"
+            "6. Upload the JSON key via `/playstore` or set `PLAY_JSON_KEY_PATH` in `.env`\n\n"
+            "Then tap **Retry** below."
+        )
+    else:
+        description = (
+            f"**{app_name}** needs to be set up on Google Play before uploading.\n\n"
+            "The admin has been notified and will set it up shortly.\n"
+            "Tap **Retry** once they confirm it's done."
+        )
+
+    return discord.Embed(
+        title="\U0001f4f2 One-time setup needed",
+        description=description,
+        color=0xFF9500,  # orange/warning
+    )
+
+
+class PlayStoreSetupView(discord.ui.View):
+    """Shown when no Play Store key is configured — lets user retry after admin sets it up."""
+
+    def __init__(self, ctx: BotContext, owner_id: int, ws_key: str, ws_path: str,
+                 app_name: str, package_name: str):
+        super().__init__(timeout=300)
+        self.ctx = ctx
+        self.owner_id = owner_id
+        self.ws_key = ws_key
+        self.ws_path = ws_path
+        self.app_name = app_name
+        self.package_name = package_name
+
+    @discord.ui.button(label="Retry", style=discord.ButtonStyle.secondary, emoji="\U0001f504")
+    async def retry(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.owner_id:
+            return await interaction.response.send_message("Not your command.", ephemeral=True)
+
+        # Re-check if a key is now available
+        state = PlayStoreState.load(self.ws_path)
+        effective_key = state.json_key_path if state.has_json_key() else config.PLAY_JSON_KEY_PATH
+
+        if not effective_key:
+            # Still no key — re-show setup embed
+            is_admin = self.owner_id == config.DISCORD_ALLOWED_USER_ID
+            embed = _playstore_setup_embed(is_admin, self.app_name, self.package_name)
+            await interaction.response.edit_message(embed=embed, view=self)
+            return
+
+        # Key available — build & upload
+        self.stop()
+        await interaction.response.edit_message(view=None)
+        ch = interaction.channel
+
+        async def ps_status(msg, fpath=None):
+            await self.ctx.send(ch, msg, file_path=fpath)
+
+        result = await handle_playstore(
+            self.ws_key, self.ws_path, on_status=ps_status,
+            key_path=effective_key,
+        )
+        if result and result.success:
+            state.last_upload_version_code = result.version_code
+            state.last_upload_timestamp = time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ", time.gmtime(),
+            )
+            state.save(self.ws_path)
+            await ch.send(embed=_playstore_success_embed(self.ws_key, self.package_name))
+        elif result and result.first_upload and result.aab_path:
+            email_view = _EmailAABView(
+                self.owner_id, result.aab_path,
+                self.ws_key, self.package_name, ch,
+            )
+            await ch.send(
+                "\U0001f4e7 **Enter your email** to receive the AAB file, "
+                "then upload it to Play Console.\n"
+                "*(This is only needed for the first upload \u2014 "
+                "future uploads are automatic)*",
+                view=email_view,
+            )
+
+    async def on_timeout(self):
+        try:
+            for item in self.children:
+                item.disabled = True
+        except Exception:
+            pass

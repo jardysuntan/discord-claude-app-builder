@@ -16,8 +16,11 @@ from commands.testflight import handle_testflight
 from views.testflight_views import _testflight_setup_embed, _testflight_success_embed, _notify_admin
 from views.playstore_views import (
     PlayStoreChecklistView,
+    PlayStoreSetupView,
     _playstore_checklist_embed,
+    _playstore_setup_embed,
     _playstore_success_embed,
+    _notify_admin_playstore,
     _EmailAABView,
 )
 
@@ -101,15 +104,24 @@ async def handle_playstore_cmd(
                         view=email_view,
                     )
             else:
-                # Show checklist
-                state.save(ws_path)  # persist initial state
-                view = PlayStoreChecklistView(
-                    ctx, user_id, ws_key, ws_path, app_name, pkg,
-                )
-                await channel.send(
-                    embed=_playstore_checklist_embed(ws_key, app_name, pkg, view.state),
-                    view=view,
-                )
+                if is_admin:
+                    # Admin sees full checklist to do setup themselves
+                    state.save(ws_path)  # persist initial state
+                    view = PlayStoreChecklistView(
+                        ctx, user_id, ws_key, ws_path, app_name, pkg,
+                    )
+                    await channel.send(
+                        embed=_playstore_checklist_embed(ws_key, app_name, pkg, view.state),
+                        view=view,
+                    )
+                else:
+                    # Non-admin: notify admin + show simple setup embed with Retry
+                    await _notify_admin_playstore(ctx, user_id, app_name, pkg)
+                    embed = _playstore_setup_embed(False, app_name, pkg)
+                    view = PlayStoreSetupView(
+                        ctx, user_id, ws_key, ws_path, app_name, pkg,
+                    )
+                    await channel.send(embed=embed, view=view)
 
 
 def _rename_app_in_workspace(ws_path: str, new_name: str) -> list[str]:

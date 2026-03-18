@@ -44,6 +44,44 @@ def get_plan(user_id: int) -> dict | None:
     return plans.get(str(user_id))
 
 
+def _plan_to_editable_text(plan: dict) -> str:
+    """Convert a plan dict into human-readable text for editing in the modal."""
+    lines = []
+    if plan.get("app_name"):
+        lines.append(f"App: {plan['app_name']}")
+    if plan.get("summary"):
+        lines.append(plan["summary"])
+    lines.append("")
+
+    for s in plan.get("screens", []):
+        comps = ", ".join(s.get("key_components", []))
+        lines.append(f"Screen: {s['name']} — {s['description']}")
+        if comps:
+            lines.append(f"  Components: {comps}")
+
+    nav = plan.get("navigation", {})
+    if nav:
+        lines.append(f"\nNav: {nav.get('type', 'stack')} — {nav.get('flow', '')}")
+
+    for e in plan.get("data_model", []):
+        fields = ", ".join(e.get("fields", []))
+        lines.append(f"Data: {e['entity']} ({fields})")
+
+    features = plan.get("features", [])
+    if features:
+        lines.append("\nFeatures:")
+        for f in features:
+            lines.append(f"- {f}")
+
+    tech = plan.get("tech_decisions", [])
+    if tech:
+        lines.append("\nTech:")
+        for t in tech:
+            lines.append(f"- {t}")
+
+    return "\n".join(lines)[:4000]
+
+
 # ── Discord embed from plan ──────────────────────────────────────────────────
 
 def plan_embed(plan: dict) -> discord.Embed:
@@ -67,7 +105,7 @@ class _PlanAppModal(discord.ui.Modal, title="Plan your app"):
     description = discord.ui.TextInput(
         label="Describe your app idea",
         style=discord.TextStyle.long,
-        placeholder="e.g. a meal planner that suggests recipes based on what's in your fridge, with a grocery list and calorie tracker",
+        placeholder="e.g. a meal planner with recipes based on what's in your fridge",
         required=True,
         max_length=4000,
     )
@@ -176,11 +214,11 @@ class _PlanActionView(discord.ui.View):
             self.ctx.registry.set_default(self.user_id, slug)
             await self.ctx.send(self.channel, f"📂 Switched to **{slug}**")
 
-    @discord.ui.button(label="Re-plan", style=discord.ButtonStyle.secondary, emoji="🔄")
+    @discord.ui.button(label="Edit plan", style=discord.ButtonStyle.secondary, emoji="✏️")
     async def replan(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
             return await interaction.response.send_message("Not your command.", ephemeral=True)
-        original_desc = self.plan.get("_original_description", "")
+        prefill = _plan_to_editable_text(self.plan)
         await interaction.response.send_modal(
-            _PlanAppModal(self.ctx, self.channel, self.user_id, self.is_admin, original_desc)
+            _PlanAppModal(self.ctx, self.channel, self.user_id, self.is_admin, prefill)
         )

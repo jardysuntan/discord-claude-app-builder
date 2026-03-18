@@ -251,13 +251,7 @@ async def handle_buildapp(
         )
         return slug
 
-    # 4. Android demo (admin only — uses emulator)
-    if is_admin:
-        await on_status("📱 **Android** — launching demo...", None)
-        android_demo = await AndroidPlatform.full_demo(ws_path)
-        await on_status(android_demo.message, android_demo.screenshot_path)
-
-    # 5. Web build + auto-fix (so anyone can try it in browser)
+    # 4. Web build + auto-fix (so anyone can try it in browser — show first)
     await on_status("🌐 **Web** — building and fixing browser version...", None)
     web_loop = await run_agent_loop(
         initial_prompt=(
@@ -292,6 +286,12 @@ async def handle_buildapp(
             f"Use `@{slug} Fix the wasmJs web target` to resolve.",
             None,
         )
+
+    # 5. Android demo (admin only — uses emulator)
+    if is_admin:
+        await on_status("📱 **Android** — launching demo...", None)
+        android_demo = await AndroidPlatform.full_demo(ws_path)
+        await on_status(android_demo.message, android_demo.screenshot_path)
 
     # 6. iOS build + auto-fix (admin only — uses simulator)
     ios_loop = None

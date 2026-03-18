@@ -154,7 +154,8 @@ async def handle_testpublish(ctx: BotContext, cmd: Command, channel, user_id: in
     from commands.playstore_state import PlayStoreState
     from views.testflight_views import _testflight_setup_embed, _testflight_success_embed
     from views.playstore_views import (
-        _playstore_checklist_embed, _playstore_success_embed,
+        _playstore_checklist_embed, _playstore_setup_embed,
+        _playstore_success_embed,
     )
 
     # Placeholder values
@@ -200,18 +201,13 @@ async def handle_testpublish(ctx: BotContext, cmd: Command, channel, user_id: in
     # ── Play Store ────────────────────────────────────────────────
     await ctx.send(channel, "**Play Store — what a non-admin user sees:**")
 
-    # Checklist embed (fresh state) with disabled buttons
-    fresh_state = PlayStoreState()
-    checklist_embed = _playstore_checklist_embed(ws_key, app_name, package_name, fresh_state)
-    checklist_view = discord.ui.View(timeout=1)
-    checklist_view.add_item(discord.ui.Button(label="I have a dev account", style=discord.ButtonStyle.success, disabled=True))
-    checklist_view.add_item(discord.ui.Button(label="App created", style=discord.ButtonStyle.success, disabled=True))
-    checklist_view.add_item(discord.ui.Button(label="Upload JSON Key", style=discord.ButtonStyle.primary, disabled=True))
-    checklist_view.add_item(discord.ui.Button(
-        label="Open Play Console", style=discord.ButtonStyle.link,
-        url="https://play.google.com/console", emoji="🔗",
+    # Setup embed (non-admin variant) with disabled Retry button
+    ps_setup_embed = _playstore_setup_embed(False, app_name, package_name)
+    ps_setup_view = discord.ui.View(timeout=1)
+    ps_setup_view.add_item(discord.ui.Button(
+        label="Retry", style=discord.ButtonStyle.secondary, emoji="\U0001f504", disabled=True,
     ))
-    await channel.send(embed=checklist_embed, view=checklist_view)
+    await channel.send(embed=ps_setup_embed, view=ps_setup_view)
 
     # Status messages
     ps_status_msgs = [

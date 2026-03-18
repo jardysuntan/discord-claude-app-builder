@@ -69,9 +69,20 @@ async def query_sql(sql: str):
 
 
 def extract_sql(text: str) -> Optional[str]:
-    """Extract SQL from Claude's markdown response (between ```sql and ``` markers)."""
+    """Extract SQL from Claude's response (code fences, or bare CREATE statements)."""
+    # Try ```sql ... ``` first
     match = re.search(r"```sql\s*\n(.*?)```", text, re.DOTALL)
-    return match.group(1).strip() if match else None
+    if match:
+        return match.group(1).strip()
+    # Try ``` ... ``` (no language tag)
+    match = re.search(r"```\s*\n(.*?)```", text, re.DOTALL)
+    if match and re.search(r"\bCREATE\s+TABLE\b", match.group(1), re.IGNORECASE):
+        return match.group(1).strip()
+    # Try bare SQL (starts with CREATE TABLE)
+    match = re.search(r"(CREATE\s+TABLE\b.*)", text, re.DOTALL | re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    return None
 
 
 # ── SQL guardrails ────────────────────────────────────────────────────────────
