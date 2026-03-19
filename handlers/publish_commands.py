@@ -29,31 +29,115 @@ if TYPE_CHECKING:
     from parser import Command
 
 
+async def _run_testflight_publish(
+    ctx: BotContext, channel, user_id: int, ws_key: str, ws_path: str,
+) -> None:
+    """Execute the actual TestFlight build & upload (no appraisal gate)."""
+    async def tf_status(msg, fpath=None):
+        await ctx.send(channel, msg, file_path=fpath)
+
+    result = await handle_testflight(ws_key, ws_path, on_status=tf_status)
+    if result and result.needs_setup:
+        await _notify_admin(ctx, user_id, result.app_name, result.bundle_id)
+        embed, view = _testflight_setup_embed(
+            ctx, user_id, ws_key, ws_path,
+            result.app_name, result.bundle_id,
+        )
+        await channel.send(embed=embed, view=view)
+    elif result and result.success:
+        await channel.send(embed=_testflight_success_embed(
+            ws_key, result.bundle_id,
+        ))
+
+
 async def handle_testflight_cmd(
     ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool,
 ) -> None:
     if not config.AGENT_MODE:
         await ctx.send(channel, "🔒 Agent mode OFF.")
-    else:
-        ws_key, ws_path = ctx.registry.resolve(None, user_id)
-        if not ws_path:
-            await ctx.send(channel, "❌ No workspace set.")
-        else:
-            async def tf_status(msg, fpath=None):
-                await ctx.send(channel, msg, file_path=fpath)
+        return
 
-            result = await handle_testflight(ws_key, ws_path, on_status=tf_status)
-            if result and result.needs_setup:
-                await _notify_admin(ctx, user_id, result.app_name, result.bundle_id)
-                embed, view = _testflight_setup_embed(
-                    ctx, user_id, ws_key, ws_path,
-                    result.app_name, result.bundle_id,
-                )
-                await channel.send(embed=embed, view=view)
-            elif result and result.success:
-                await channel.send(embed=_testflight_success_embed(
-                    ws_key, result.bundle_id,
-                ))
+    ws_key, ws_path = ctx.registry.resolve(None, user_id)
+    if not ws_path:
+        await ctx.send(channel, "❌ No workspace set.")
+        return
+
+    # Appraisal gate
+    from commands.appraise import run_appraisal
+    from views.appraise_views import appraisal_embed, AppraisalGateView
+
+    await ctx.send(channel, "🔍 Running pre-publish appraisal...")
+    appraisal = await run_appraisal(ctx.claude, ws_key, ws_path, platform="apple")
+
+    if appraisal and appraisal.get("overall_score") not in ("pass", None):
+        embed = appraisal_embed(appraisal, platform="apple")
+        view = AppraisalGateView(
+            ctx, channel, user_id, is_admin, ws_key, ws_path,
+            publish_target="testflight", appraisal=appraisal,
+        )
+        await channel.send(embed=embed, view=view)
+    else:
+        # Pass or appraisal failed to run — auto-continue
+        await _run_testflight_publish(ctx, channel, user_id, ws_key, ws_path)
+
+
+async def _run_playstore_publish(
+    ctx: BotContext, channel, user_id: int, ws_key: str, ws_path: str,
+    is_admin: bool,
+) -> None:
+    """Execute the actual Play Store build & upload (no appraisal gate)."""
+    from platforms import AndroidPlatform as _AP
+    pkg = _AP.parse_app_id(ws_path) or ""
+    app_name = ws_key.replace("-", " ").replace("_", " ").title()
+    state = PlayStoreState.load(ws_path)
+
+    effective_key = state.json_key_path if state.has_json_key() else config.PLAY_JSON_KEY_PATH
+    if effective_key:
+        async def ps_status(msg, fpath=None):
+            await ctx.send(channel, msg, file_path=fpath)
+
+        result = await handle_playstore(
+            ws_key, ws_path, on_status=ps_status,
+            key_path=effective_key,
+        )
+        if result and result.success:
+            state.last_upload_version_code = result.version_code
+            state.last_upload_timestamp = time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ", time.gmtime(),
+            )
+            state.save(ws_path)
+            await channel.send(embed=_playstore_success_embed(
+                ws_key, pkg or result.package_name,
+            ))
+        elif result and result.first_upload and result.aab_path:
+            email_view = _EmailAABView(
+                user_id, result.aab_path,
+                ws_key, pkg, channel,
+            )
+            await channel.send(
+                "📧 **Enter your email** to receive the AAB file, "
+                "then upload it to Play Console.\n"
+                "*(This is only needed for the first upload — "
+                "future uploads are automatic)*",
+                view=email_view,
+            )
+    else:
+        if is_admin:
+            state.save(ws_path)
+            view = PlayStoreChecklistView(
+                ctx, user_id, ws_key, ws_path, app_name, pkg,
+            )
+            await channel.send(
+                embed=_playstore_checklist_embed(ws_key, app_name, pkg, view.state),
+                view=view,
+            )
+        else:
+            await _notify_admin_playstore(ctx, user_id, app_name, pkg)
+            embed = _playstore_setup_embed(False, app_name, pkg)
+            view = PlayStoreSetupView(
+                ctx, user_id, ws_key, ws_path, app_name, pkg,
+            )
+            await channel.send(embed=embed, view=view)
 
 
 async def handle_playstore_cmd(
@@ -61,67 +145,29 @@ async def handle_playstore_cmd(
 ) -> None:
     if not config.AGENT_MODE:
         await ctx.send(channel, "🔒 Agent mode OFF.")
+        return
+
+    ws_key, ws_path = ctx.registry.resolve(None, user_id)
+    if not ws_path:
+        await ctx.send(channel, "❌ No workspace set.")
+        return
+
+    # Appraisal gate
+    from commands.appraise import run_appraisal
+    from views.appraise_views import appraisal_embed, AppraisalGateView
+
+    await ctx.send(channel, "🔍 Running pre-publish appraisal...")
+    appraisal = await run_appraisal(ctx.claude, ws_key, ws_path, platform="google")
+
+    if appraisal and appraisal.get("overall_score") not in ("pass", None):
+        embed = appraisal_embed(appraisal, platform="google")
+        view = AppraisalGateView(
+            ctx, channel, user_id, is_admin, ws_key, ws_path,
+            publish_target="playstore", appraisal=appraisal,
+        )
+        await channel.send(embed=embed, view=view)
     else:
-        ws_key, ws_path = ctx.registry.resolve(None, user_id)
-        if not ws_path:
-            await ctx.send(channel, "❌ No workspace set.")
-        else:
-            from platforms import AndroidPlatform as _AP
-            pkg = _AP.parse_app_id(ws_path) or ""
-            app_name = ws_key.replace("-", " ").replace("_", " ").title()
-            state = PlayStoreState.load(ws_path)
-
-            # Use per-workspace key, or fall back to global key from .env
-            effective_key = state.json_key_path if state.has_json_key() else config.PLAY_JSON_KEY_PATH
-            if effective_key:
-                # Key available -- build & upload directly
-                async def ps_status(msg, fpath=None):
-                    await ctx.send(channel, msg, file_path=fpath)
-
-                result = await handle_playstore(
-                    ws_key, ws_path, on_status=ps_status,
-                    key_path=effective_key,
-                )
-                if result and result.success:
-                    state.last_upload_version_code = result.version_code
-                    state.last_upload_timestamp = time.strftime(
-                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(),
-                    )
-                    state.save(ws_path)
-                    await channel.send(embed=_playstore_success_embed(
-                        ws_key, pkg or result.package_name,
-                    ))
-                elif result and result.first_upload and result.aab_path:
-                    email_view = _EmailAABView(
-                        user_id, result.aab_path,
-                        ws_key, pkg, channel,
-                    )
-                    await channel.send(
-                        "📧 **Enter your email** to receive the AAB file, "
-                        "then upload it to Play Console.\n"
-                        "*(This is only needed for the first upload — "
-                        "future uploads are automatic)*",
-                        view=email_view,
-                    )
-            else:
-                if is_admin:
-                    # Admin sees full checklist to do setup themselves
-                    state.save(ws_path)  # persist initial state
-                    view = PlayStoreChecklistView(
-                        ctx, user_id, ws_key, ws_path, app_name, pkg,
-                    )
-                    await channel.send(
-                        embed=_playstore_checklist_embed(ws_key, app_name, pkg, view.state),
-                        view=view,
-                    )
-                else:
-                    # Non-admin: notify admin + show simple setup embed with Retry
-                    await _notify_admin_playstore(ctx, user_id, app_name, pkg)
-                    embed = _playstore_setup_embed(False, app_name, pkg)
-                    view = PlayStoreSetupView(
-                        ctx, user_id, ws_key, ws_path, app_name, pkg,
-                    )
-                    await channel.send(embed=embed, view=view)
+        await _run_playstore_publish(ctx, channel, user_id, ws_key, ws_path, is_admin)
 
 
 def _rename_app_in_workspace(ws_path: str, new_name: str) -> list[str]:

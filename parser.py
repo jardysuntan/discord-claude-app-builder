@@ -90,6 +90,9 @@ def parse(text: str) -> ParseResult:
                 platform, _ = _parse_platform(rest)
                 return Command(name="demo", platform=platform)
 
+            case "/appraise" | "/appcheck" | "/review":
+                return Command(name="appraise")
+
             case "/testflight":
                 return Command(name="testflight")
 
