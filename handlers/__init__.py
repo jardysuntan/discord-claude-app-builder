@@ -14,10 +14,12 @@ from handlers import (
     build_commands,
     plan_commands,
     publish_commands,
+    appraise_commands,
     save_git_commands,
     admin_commands,
     system_commands,
     data_commands,
+    integrate_commands,
 )
 
 COMMAND_HANDLERS = {
@@ -25,8 +27,10 @@ COMMAND_HANDLERS = {
     **build_commands.HANDLERS,
     **plan_commands.HANDLERS,
     **publish_commands.HANDLERS,
+    **appraise_commands.HANDLERS,
     **save_git_commands.HANDLERS,
     **admin_commands.HANDLERS,
     **system_commands.HANDLERS,
     **data_commands.HANDLERS,
+    **integrate_commands.HANDLERS,
 }
