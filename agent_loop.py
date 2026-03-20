@@ -11,6 +11,7 @@ from typing import Optional, Callable, Awaitable
 import config
 from claude_runner import ClaudeRunner
 from commands.fixes_cmd import log_fix, get_recent_fixes
+from helpers.budget import BudgetTracker
 from platforms import build_platform, extract_build_error
 
 
@@ -48,6 +49,7 @@ async def run_agent_loop(
     platform: str = "android",
     max_attempts: int = None,
     on_status: Optional[Callable[[str], Awaitable[None]]] = None,
+    budget: Optional[BudgetTracker] = None,
 ) -> AgentLoopResult:
     """
     1. Send initial prompt to Claude
@@ -75,6 +77,8 @@ async def run_agent_loop(
             initial_prompt, workspace_key, workspace_path,
             on_progress=on_status,
         )
+        if budget:
+            budget.record(initial_result.total_cost_usd)
 
         if initial_result.exit_code == 0:
             break
@@ -97,6 +101,14 @@ async def run_agent_loop(
     if on_status:
         preview = initial_result.stdout[:400]
         await on_status(f"✅ Claude responded.\n```\n{preview}\n```")
+
+    # Budget check after initial prompt
+    if budget and budget.exceeded:
+        return AgentLoopResult(
+            success=False, total_attempts=0,
+            total_duration_secs=time.time() - loop_start,
+            final_message=budget.exceeded_message,
+        )
 
     # Step 2-4: Build loop
     platform_label = platform.upper() if platform != "all" else "ALL"
@@ -160,6 +172,19 @@ async def run_agent_loop(
             f"Only modify what's necessary.\n{sim_hint}\n```\n{error_snippet}\n```"
         )
 
+        # Budget check before asking Claude for a fix
+        if budget and budget.exceeded:
+            attempts.append(BuildAttempt(
+                attempt=attempt_num, success=False,
+                duration_secs=build_duration, error_snippet=error_snippet[:500],
+            ))
+            return AgentLoopResult(
+                success=False, total_attempts=attempt_num,
+                total_duration_secs=time.time() - loop_start,
+                attempts=attempts,
+                final_message=budget.exceeded_message,
+            )
+
         # Try fix with retry on Claude failure
         fix_result = None
         for fix_try in range(1, 3):
@@ -167,6 +192,8 @@ async def run_agent_loop(
                 fix_prompt, workspace_key, workspace_path,
                 on_progress=on_status,
             )
+            if budget:
+                budget.record(fix_result.total_cost_usd)
             if fix_result.exit_code == 0:
                 break
             claude.clear_session(workspace_key)

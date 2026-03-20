@@ -11,6 +11,7 @@ import config
 from agent_loop import run_agent_loop, format_loop_summary
 from bot_context import STILL_LISTENING
 from commands import fixes_cmd
+from helpers.budget import BudgetTracker
 from platforms import (
     AndroidPlatform,
     iOSPlatform,
@@ -20,8 +21,14 @@ from platforms import (
 from helpers.web_screenshot import take_web_screenshot
 
 
-async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str):
+async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str,
+                   budget: BudgetTracker = None):
     """Run a demo for a single platform. Shared by /demo <plat> and DemoPlatformView."""
+    if budget is None:
+        budget = BudgetTracker(
+            max_cost_usd=config.MAX_FIX_BUDGET_USD,
+            max_invocations=config.MAX_TOTAL_INVOCATIONS,
+        )
     await ctx.send(channel, f"📱 Demoing **{ws_key}** [{platform}]...")
     await ctx.send(channel, STILL_LISTENING)
 
@@ -55,6 +62,7 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str):
                     platform="ios",
                     max_attempts=config.MAX_BUILD_ATTEMPTS,
                     on_status=ios_fix_status,
+                    budget=budget,
                 )
                 if not fix_result.success:
                     summary = format_loop_summary(fix_result)
@@ -82,12 +90,19 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str):
                     # Check for runtime crash
                     crash_log = await iOSPlatform.check_crash(bundle_id)
                     if crash_log:
+                        if budget.exceeded:
+                            await ctx.send(channel, budget.exceeded_message)
+                            return
                         await ctx.send(channel, "💥 App crashed on launch — auto-fixing...")
                         async def crash_fix_status(msg):
                             await ctx.send(channel, msg)
 
                         crash_fixed = False
                         for crash_attempt in range(1, config.MAX_BUILD_ATTEMPTS + 1):
+                            if budget.exceeded:
+                                await ctx.send(channel, budget.exceeded_message)
+                                return
+
                             fix_result = await run_agent_loop(
                                 initial_prompt=(
                                     f"The iOS app ({bundle_id}) crashes on launch with a runtime error.\n"
@@ -102,6 +117,7 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str):
                                 platform="ios",
                                 max_attempts=config.MAX_BUILD_ATTEMPTS,
                                 on_status=crash_fix_status,
+                                budget=budget,
                             )
                             if not fix_result.success:
                                 await ctx.send(channel, format_loop_summary(fix_result))
@@ -165,6 +181,7 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str):
                     platform="android",
                     max_attempts=config.MAX_BUILD_ATTEMPTS,
                     on_status=android_fix_status,
+                    budget=budget,
                 )
                 if not fix_result.success:
                     summary = format_loop_summary(fix_result)
@@ -196,12 +213,19 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str):
 
                         crash_log = await AndroidPlatform.check_crash(app_id)
                         if crash_log:
+                            if budget.exceeded:
+                                await ctx.send(channel, budget.exceeded_message)
+                                return
                             await ctx.send(channel, "💥 App crashed on launch — auto-fixing...")
                             async def android_crash_fix_status(msg):
                                 await ctx.send(channel, msg)
 
                             crash_fixed = False
                             for crash_attempt in range(1, config.MAX_BUILD_ATTEMPTS + 1):
+                                if budget.exceeded:
+                                    await ctx.send(channel, budget.exceeded_message)
+                                    return
+
                                 fix_result = await run_agent_loop(
                                     initial_prompt=(
                                         f"The Android app ({app_id}) crashes on launch with a runtime error.\n"
@@ -214,6 +238,7 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str):
                                     platform="android",
                                     max_attempts=config.MAX_BUILD_ATTEMPTS,
                                     on_status=android_crash_fix_status,
+                                    budget=budget,
                                 )
                                 if not fix_result.success:
                                     await ctx.send(channel, format_loop_summary(fix_result))
@@ -279,6 +304,7 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str):
                 platform="web",
                 max_attempts=config.MAX_BUILD_ATTEMPTS,
                 on_status=web_fix_status,
+                budget=budget,
             )
             if not fix_result.success:
                 summary = format_loop_summary(fix_result)
@@ -305,12 +331,19 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str):
                 local_url = f"http://localhost:{config.WEB_SERVE_PORT}"
                 health_err = await WebPlatform.check_health(local_url)
                 if health_err:
+                    if budget.exceeded:
+                        await ctx.send(channel, budget.exceeded_message)
+                        return
                     await ctx.send(channel, f"⚠️ Web app unhealthy ({health_err}) — auto-fixing...")
                     async def web_health_fix_status(msg):
                         await ctx.send(channel, msg)
 
                     health_fixed = False
                     for health_attempt in range(1, config.MAX_BUILD_ATTEMPTS + 1):
+                        if budget.exceeded:
+                            await ctx.send(channel, budget.exceeded_message)
+                            return
+
                         fix_result = await run_agent_loop(
                             initial_prompt=(
                                 f"The web app built and is being served at {url}, but the health check failed.\n"
@@ -323,6 +356,7 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str):
                             platform="web",
                             max_attempts=config.MAX_BUILD_ATTEMPTS,
                             on_status=web_health_fix_status,
+                            budget=budget,
                         )
                         if not fix_result.success:
                             await ctx.send(channel, format_loop_summary(fix_result))
