@@ -12,6 +12,7 @@ from agent_loop import run_agent_loop, format_loop_summary
 from bot_context import STILL_LISTENING
 from commands import fixes_cmd
 from helpers.budget import BudgetTracker
+from helpers.progress import ProgressMessage
 from platforms import (
     AndroidPlatform,
     iOSPlatform,
@@ -33,20 +34,18 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str,
     await ctx.send(channel, STILL_LISTENING)
 
     if platform == "ios":
-        await ctx.send(channel, "Booting iOS Simulator...")
+        progress = ProgressMessage(ctx, channel, title=f"iOS Demo — {ws_key}")
+        await progress.update("Booting iOS Simulator...")
         ok, sim_msg = await iOSPlatform.ensure_simulator()
         if not ok:
             await ctx.send(channel, f"❌ {sim_msg}")
         else:
-            await ctx.send(channel, f"{sim_msg} Building KMP framework + Xcode project...")
+            await progress.update(f"{sim_msg} Building KMP framework + Xcode project...")
             build_result = await iOSPlatform.build(ws_path)
 
             # Auto-fix: if build fails, use agent loop (same as /buildapp iOS)
             if not build_result.success:
-                await ctx.send(channel, "⚠️ iOS build failed — auto-fixing...")
-
-                async def ios_fix_status(msg):
-                    await ctx.send(channel, msg)
+                await progress.update("⚠️ iOS build failed — auto-fixing...")
 
                 fix_result = await run_agent_loop(
                     initial_prompt=(
@@ -61,10 +60,11 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str,
                     claude=ctx.claude,
                     platform="ios",
                     max_attempts=config.MAX_BUILD_ATTEMPTS,
-                    on_status=ios_fix_status,
+                    on_status=progress.status_callback,
                     budget=budget,
                 )
                 if not fix_result.success:
+                    await progress.close()
                     summary = format_loop_summary(fix_result)
                     await ctx.send(channel, summary)
                     build_result = None
@@ -79,12 +79,12 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str,
             if build_result is None:
                 pass  # auto-fix failed, already reported
             else:
-                await ctx.send(channel, "Build succeeded. Installing on simulator...")
+                await progress.update("Build succeeded. Installing on simulator...")
                 bundle_id = await iOSPlatform.install_and_launch(ws_path)
                 if bundle_id.startswith(("Could not", "Install failed", "Installed but")):
                     await ctx.send(channel, f"❌ {bundle_id}")
                 else:
-                    await ctx.send(channel, f"Launched **{bundle_id}**. Checking for crashes...")
+                    await progress.update(f"Launched **{bundle_id}**. Checking for crashes...")
                     await asyncio.sleep(3)
 
                     # Check for runtime crash
@@ -93,9 +93,7 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str,
                         if budget.exceeded:
                             await ctx.send(channel, budget.exceeded_message)
                             return
-                        await ctx.send(channel, "💥 App crashed on launch — auto-fixing...")
-                        async def crash_fix_status(msg):
-                            await ctx.send(channel, msg)
+                        await progress.update("💥 App crashed on launch — auto-fixing...")
 
                         crash_fixed = False
                         for crash_attempt in range(1, config.MAX_BUILD_ATTEMPTS + 1):
@@ -116,10 +114,11 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str,
                                 claude=ctx.claude,
                                 platform="ios",
                                 max_attempts=config.MAX_BUILD_ATTEMPTS,
-                                on_status=crash_fix_status,
+                                on_status=progress.status_callback,
                                 budget=budget,
                             )
                             if not fix_result.success:
+                                await progress.close()
                                 await ctx.send(channel, format_loop_summary(fix_result))
                                 break
 
@@ -134,7 +133,7 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str,
                             if not crash_log:
                                 crash_fixed = True
                                 break
-                            await ctx.send(channel, f"💥 Still crashing (attempt {crash_attempt})— retrying fix...")
+                            await progress.update(f"💥 Still crashing (attempt {crash_attempt})— retrying fix...")
 
                         if crash_fixed:
                             await ctx.send(channel, "✅ Crash fixed!")
@@ -151,23 +150,22 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str,
                             return
 
                     # App is running — take screenshot
+                    await progress.close()
                     screenshot = await iOSPlatform.screenshot()
                     await ctx.send(channel, f"✅ **{bundle_id}** running on iOS Simulator.", file_path=screenshot)
     elif platform == "android":
-        await ctx.send(channel, "Checking Android device/emulator...")
+        progress = ProgressMessage(ctx, channel, title=f"Android Demo — {ws_key}")
+        await progress.update("Checking Android device/emulator...")
         ok, dev_msg = await AndroidPlatform.ensure_device()
         if not ok:
             await ctx.send(channel, f"❌ {dev_msg}")
         else:
-            await ctx.send(channel, f"{dev_msg} Building Android APK...")
+            await progress.update(f"{dev_msg} Building Android APK...")
             build_result = await AndroidPlatform.build(ws_path)
 
             # Auto-fix: if build fails, use agent loop
             if not build_result.success:
-                await ctx.send(channel, "⚠️ Android build failed — auto-fixing...")
-
-                async def android_fix_status(msg):
-                    await ctx.send(channel, msg)
+                await progress.update("⚠️ Android build failed — auto-fixing...")
 
                 fix_result = await run_agent_loop(
                     initial_prompt=(
@@ -180,10 +178,11 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str,
                     claude=ctx.claude,
                     platform="android",
                     max_attempts=config.MAX_BUILD_ATTEMPTS,
-                    on_status=android_fix_status,
+                    on_status=progress.status_callback,
                     budget=budget,
                 )
                 if not fix_result.success:
+                    await progress.close()
                     summary = format_loop_summary(fix_result)
                     await ctx.send(channel, summary)
                     build_result = None
@@ -198,7 +197,7 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str,
             if build_result is None:
                 pass  # auto-fix failed, already reported
             else:
-                await ctx.send(channel, "Build succeeded. Installing on device...")
+                await progress.update("Build succeeded. Installing on device...")
                 install_result = await AndroidPlatform.install(ws_path)
                 if not install_result.success:
                     await ctx.send(channel, f"❌ Install failed:\n```\n{install_result.error[:800]}\n```")
@@ -208,7 +207,7 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str,
                     if app_id.startswith("Could not"):
                         await ctx.send(channel, f"❌ {app_id}")
                     else:
-                        await ctx.send(channel, f"Launched **{app_id}**. Checking for crashes...")
+                        await progress.update(f"Launched **{app_id}**. Checking for crashes...")
                         await asyncio.sleep(3)
 
                         crash_log = await AndroidPlatform.check_crash(app_id)
@@ -216,9 +215,7 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str,
                             if budget.exceeded:
                                 await ctx.send(channel, budget.exceeded_message)
                                 return
-                            await ctx.send(channel, "💥 App crashed on launch — auto-fixing...")
-                            async def android_crash_fix_status(msg):
-                                await ctx.send(channel, msg)
+                            await progress.update("💥 App crashed on launch — auto-fixing...")
 
                             crash_fixed = False
                             for crash_attempt in range(1, config.MAX_BUILD_ATTEMPTS + 1):
@@ -237,10 +234,11 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str,
                                     claude=ctx.claude,
                                     platform="android",
                                     max_attempts=config.MAX_BUILD_ATTEMPTS,
-                                    on_status=android_crash_fix_status,
+                                    on_status=progress.status_callback,
                                     budget=budget,
                                 )
                                 if not fix_result.success:
+                                    await progress.close()
                                     await ctx.send(channel, format_loop_summary(fix_result))
                                     break
 
@@ -261,7 +259,7 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str,
                                 if not crash_log:
                                     crash_fixed = True
                                     break
-                                await ctx.send(channel, f"💥 Still crashing (attempt {crash_attempt}) — retrying fix...")
+                                await progress.update(f"💥 Still crashing (attempt {crash_attempt}) — retrying fix...")
 
                             if crash_fixed:
                                 await ctx.send(channel, "✅ Crash fixed!")
@@ -278,19 +276,18 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str,
                                 return
 
                         # App is running — take screenshot
+                        await progress.close()
                         screenshot = await AndroidPlatform.screenshot()
                         await ctx.send(channel, f"✅ **{app_id}** running on Android.", file_path=screenshot)
 
     elif platform == "web":
-        await ctx.send(channel, "Building web app...")
+        progress = ProgressMessage(ctx, channel, title=f"Web Demo — {ws_key}")
+        await progress.update("Building web app...")
         build_result = await WebPlatform.build(ws_path)
 
         # Auto-fix: if build fails, use agent loop
         if not build_result.success:
-            await ctx.send(channel, "⚠️ Web build failed — auto-fixing...")
-
-            async def web_fix_status(msg):
-                await ctx.send(channel, msg)
+            await progress.update("⚠️ Web build failed — auto-fixing...")
 
             fix_result = await run_agent_loop(
                 initial_prompt=(
@@ -303,10 +300,11 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str,
                 claude=ctx.claude,
                 platform="web",
                 max_attempts=config.MAX_BUILD_ATTEMPTS,
-                on_status=web_fix_status,
+                on_status=progress.status_callback,
                 budget=budget,
             )
             if not fix_result.success:
+                await progress.close()
                 summary = format_loop_summary(fix_result)
                 await ctx.send(channel, summary)
                 build_result = None
@@ -321,7 +319,7 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str,
         if build_result is None:
             pass  # auto-fix failed, already reported
         else:
-            await ctx.send(channel, "Build succeeded. Starting web server...")
+            await progress.update("Build succeeded. Starting web server...")
             url = await WebPlatform.serve(ws_path, ws_key)
             if not url:
                 await ctx.send(channel, "❌ Built but could not find distribution directory.")
@@ -334,9 +332,7 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str,
                     if budget.exceeded:
                         await ctx.send(channel, budget.exceeded_message)
                         return
-                    await ctx.send(channel, f"⚠️ Web app unhealthy ({health_err}) — auto-fixing...")
-                    async def web_health_fix_status(msg):
-                        await ctx.send(channel, msg)
+                    await progress.update(f"⚠️ Web app unhealthy ({health_err}) — auto-fixing...")
 
                     health_fixed = False
                     for health_attempt in range(1, config.MAX_BUILD_ATTEMPTS + 1):
@@ -355,10 +351,11 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str,
                             claude=ctx.claude,
                             platform="web",
                             max_attempts=config.MAX_BUILD_ATTEMPTS,
-                            on_status=web_health_fix_status,
+                            on_status=progress.status_callback,
                             budget=budget,
                         )
                         if not fix_result.success:
+                            await progress.close()
                             await ctx.send(channel, format_loop_summary(fix_result))
                             break
 
@@ -378,7 +375,7 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str,
                         if not health_err:
                             health_fixed = True
                             break
-                        await ctx.send(channel, f"⚠️ Still unhealthy (attempt {health_attempt}) — retrying fix...")
+                        await progress.update(f"⚠️ Still unhealthy (attempt {health_attempt}) — retrying fix...")
 
                     if health_fixed:
                         await ctx.send(channel, "✅ Web app healthy!")
@@ -394,6 +391,7 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str,
                             await ctx.send(channel, f"❌ Web app still unhealthy after {config.MAX_BUILD_ATTEMPTS} fix attempts.")
                         return
 
+                await progress.close()
                 await ctx.send(channel, f"✅ Web app live!\n🔗 {url}")
                 shot = await take_web_screenshot(f"http://localhost:{config.WEB_SERVE_PORT}")
                 if shot:
