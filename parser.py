@@ -93,6 +93,9 @@ def parse(text: str) -> ParseResult:
             case "/appraise" | "/appcheck" | "/review":
                 return Command(name="appraise")
 
+            case "/integrate" | "/integration" | "/addintegration":
+                return Command(name="integrate", raw_cmd=rest or None)
+
             case "/testflight":
                 return Command(name="testflight")
 
