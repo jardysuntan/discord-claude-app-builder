@@ -23,7 +23,7 @@ from helpers.web_screenshot import take_web_screenshot
 
 async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str,
                    budget: BudgetTracker = None):
-    """Run a demo for a single platform. Shared by /demo <plat> and DemoPlatformView."""
+    """Run a demo for a single platform."""
     if budget is None:
         budget = BudgetTracker(
             max_cost_usd=config.MAX_FIX_BUDGET_USD,
