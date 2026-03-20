@@ -21,7 +21,7 @@ from helpers.web_screenshot import take_web_screenshot
 
 
 async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str):
-    """Run a demo for a single platform. Shared by /demo <plat> and DemoPlatformView."""
+    """Run a demo for a single platform."""
     await ctx.send(channel, f"📱 Demoing **{ws_key}** [{platform}]...")
     await ctx.send(channel, STILL_LISTENING)
 
