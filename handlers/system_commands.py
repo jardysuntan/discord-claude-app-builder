@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 import config
 from commands.bot_todo import handle_bot_todo
+from commands.status_cmd import build_dashboard
 from helpers.ui_helpers import send_workspace_footer
 
 if TYPE_CHECKING:
@@ -197,11 +198,34 @@ async def handle_announce(ctx: BotContext, cmd: Command, channel, user_id: int, 
             await ctx.send(channel, f"📢 {cmd.raw_cmd}")
 
 
+async def handle_history(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
+    ws_key, ws_path = ctx.registry.resolve(None, user_id)
+    if not ws_key or not ws_path:
+        await ctx.send(channel, "❌ No workspace set. Use `/use <name>` first.")
+        return
+    detail = bool(cmd.raw_cmd and "--detail" in cmd.raw_cmd)
+    text = build_dashboard(
+        ws_key=ws_key,
+        ws_path=ws_path,
+        user_id=user_id,
+        cost_tracker=ctx.cost_tracker,
+        registry=ctx.registry,
+        detail=detail,
+    )
+    await ctx.send(channel, text)
+
+
 async def handle_unknown(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
     await ctx.send(channel, "❓ Unknown command. `/help`")
 
 
+async def handle_smoketest(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
+    from commands.smoketest import handle_smoketest as _impl
+    await _impl(ctx, cmd, channel, user_id, is_admin)
+
+
 HANDLERS = {
+    "smoketest": handle_smoketest,
     "spend": handle_spend,
     "setup": handle_setup,
     "health": handle_health,
@@ -210,5 +234,6 @@ HANDLERS = {
     "newsession": handle_newsession,
     "maintenance": handle_maintenance,
     "announce": handle_announce,
+    "history": handle_history,
     "unknown": handle_unknown,
 }

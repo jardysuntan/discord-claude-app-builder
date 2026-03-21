@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import config
-from helpers.demo_runner import run_demo
+from helpers.demo_runner import run_demo, run_demo_all
 from views.buildapp_views import _BuildAppView
 from views.deploy_embeds import _ios_deploy_info_embed
 
@@ -83,6 +83,14 @@ async def handle_demo(ctx: BotContext, cmd: Command, channel, user_id: int, is_a
                     "🔒 `/demo android` is admin-only. Use `/demo web` to test in your browser, "
                     "or `/playstore` to publish to Google Play Store for testing.",
                 )
+        elif cmd.platform == "all":
+            if not is_admin:
+                await ctx.send(
+                    channel,
+                    "🔒 `/demo all` is admin-only (requires iOS + Android access).",
+                )
+            else:
+                await run_demo_all(ctx, channel, ws_key, ws_path)
         elif cmd.platform:
             # /demo android, /demo ios, /demo web -> run directly
             prev = ctx.registry.get_platform(user_id)

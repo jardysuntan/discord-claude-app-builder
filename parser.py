@@ -31,7 +31,7 @@ class FallbackPrompt:
 
 ParseResult = WorkspacePrompt | Command | FallbackPrompt
 
-PLATFORMS = {"android", "ios", "web"}
+PLATFORMS = {"android", "ios", "web", "all"}
 
 
 def _parse_platform(text: str) -> tuple[Optional[str], str]:
@@ -185,6 +185,10 @@ def parse(text: str) -> ParseResult:
             case "/admin":
                 return Command(name="admin")
 
+            # ── Dashboard ─────────────────────────────────────────────
+            case "/history":
+                return Command(name="dashboard", raw_cmd=rest or None)
+
             # ── System ────────────────────────────────────────────────
             case "/setup":
                 return Command(name="setup")
@@ -200,6 +204,8 @@ def parse(text: str) -> ParseResult:
                 return Command(name="maintenance", raw_cmd=rest or None)
             case "/announce":
                 return Command(name="announce", raw_cmd=rest or None)
+            case "/smoketest" | "/smoke-test":
+                return Command(name="smoketest")
             case "/testnewuser":
                 return Command(name="testnewuser")
             case "/testpublish":

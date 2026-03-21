@@ -22,16 +22,48 @@ from platforms import (
 from helpers.web_screenshot import take_web_screenshot
 
 
+async def run_demo_all(ctx, channel, ws_key: str, ws_path: str,
+                       budget: BudgetTracker = None):
+    """Run web first (deliver link immediately), then iOS + Android in parallel."""
+    if budget is None:
+        budget = BudgetTracker(
+            max_cost_usd=config.MAX_FIX_BUDGET_USD,
+            max_invocations=config.MAX_TOTAL_INVOCATIONS,
+        )
+
+    await ctx.send(channel, f"📱 Demoing **{ws_key}** [all platforms]...")
+    await ctx.send(channel, STILL_LISTENING)
+
+    # --- Phase 1: Web builds first, deliver link immediately ---
+    await run_demo(ctx, channel, ws_key, ws_path, "web", budget=budget)
+
+    # --- Phase 2: iOS + Android build in parallel ---
+    await ctx.send(channel, "🔨 Starting native builds (iOS + Android) in parallel...")
+
+    async def _run_native(platform: str):
+        try:
+            await run_demo(ctx, channel, ws_key, ws_path, platform,
+                           budget=budget, announce=False)
+        except Exception as exc:
+            await ctx.send(channel, f"❌ {platform} demo failed: {exc}")
+
+    await asyncio.gather(
+        _run_native("ios"),
+        _run_native("android"),
+    )
+
+
 async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str,
-                   budget: BudgetTracker = None):
+                   budget: BudgetTracker = None, announce: bool = True):
     """Run a demo for a single platform."""
     if budget is None:
         budget = BudgetTracker(
             max_cost_usd=config.MAX_FIX_BUDGET_USD,
             max_invocations=config.MAX_TOTAL_INVOCATIONS,
         )
-    await ctx.send(channel, f"📱 Demoing **{ws_key}** [{platform}]...")
-    await ctx.send(channel, STILL_LISTENING)
+    if announce:
+        await ctx.send(channel, f"📱 Demoing **{ws_key}** [{platform}]...")
+        await ctx.send(channel, STILL_LISTENING)
 
     if platform == "ios":
         progress = ProgressMessage(ctx, channel, title=f"iOS Demo — {ws_key}")

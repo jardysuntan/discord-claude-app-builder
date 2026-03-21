@@ -26,6 +26,11 @@ from helpers.ui_helpers import send_workspace_footer
 from helpers.pro_tips import pro_tip_embed, ProTipsDismissView, TIPS
 from helpers.web_screenshot import take_web_screenshot
 from helpers.prompt_suggest import suggest as suggest_prompt
+from helpers.screenshot_compare import (
+    take_app_screenshot,
+    build_visual_diff_prompt,
+    _guess_route_from_text,
+)
 
 if TYPE_CHECKING:
     from bot_context import BotContext
@@ -99,15 +104,16 @@ async def handle_prompt(
             "Google Maps will be supported in a future update."
         )
 
-    # Download image attachments and augment prompt
+    # Download image attachments and augment prompt with visual comparison
     image_paths = await _save_attachments(attachments, ws_path)
     if image_paths:
-        paths_str = "\n".join(f"  - {p}" for p in image_paths)
-        prompt = (
-            f"The user attached {len(image_paths)} image(s). "
-            f"Read these files to see what they shared:\n{paths_str}\n\n{prompt}"
-        )
-        await ctx.send(channel, f"📎 {len(image_paths)} image(s) attached — Claude will review them.")
+        await ctx.send(channel, f"📎 {len(image_paths)} image(s) attached — capturing current app state…")
+        route = _guess_route_from_text(prompt)
+        bot_screenshot = await take_app_screenshot(path=route)
+        if bot_screenshot:
+            await ctx.send(channel, f"📸 Captured current app at `{route}` for comparison.")
+        diff_prompt = build_visual_diff_prompt(image_paths, bot_screenshot)
+        prompt = f"{diff_prompt}\n\nUser message: {prompt}"
 
     # ── Prompt suggestion ────────────────────────────────────────────────
     if config.ENABLE_PROMPT_SUGGESTIONS and not image_paths:
