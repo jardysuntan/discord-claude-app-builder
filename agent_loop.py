@@ -10,6 +10,7 @@ from typing import Optional, Callable, Awaitable
 
 import config
 from claude_runner import ClaudeRunner
+from commands.build_log import log_build
 from commands.fixes_cmd import log_fix, get_recent_fixes
 from helpers.budget import BudgetTracker
 from platforms import build_platform, extract_build_error
@@ -124,12 +125,14 @@ async def run_agent_loop(
 
         if result.success:
             attempts.append(BuildAttempt(attempt=attempt_num, success=True, duration_secs=build_duration))
-            return AgentLoopResult(
+            loop_result = AgentLoopResult(
                 success=True, total_attempts=attempt_num,
                 total_duration_secs=time.time() - loop_start,
                 attempts=attempts,
                 final_message=f"✅ {platform_label} build succeeded on attempt {attempt_num}.",
             )
+            _log_build_result(workspace_path, platform, loop_result, budget)
+            return loop_result
 
         error_snippet = result.error or extract_build_error(result.output)
 
@@ -138,7 +141,7 @@ async def run_agent_loop(
                 attempt=attempt_num, success=False,
                 duration_secs=build_duration, error_snippet=error_snippet[:500],
             ))
-            return AgentLoopResult(
+            loop_result = AgentLoopResult(
                 success=False, total_attempts=attempt_num,
                 total_duration_secs=time.time() - loop_start,
                 attempts=attempts,
@@ -147,6 +150,8 @@ async def run_agent_loop(
                     f"**Error:**\n```\n{error_snippet[:800]}\n```"
                 ),
             )
+            _log_build_result(workspace_path, platform, loop_result, budget)
+            return loop_result
 
         last_error = error_snippet
 
@@ -178,12 +183,14 @@ async def run_agent_loop(
                 attempt=attempt_num, success=False,
                 duration_secs=build_duration, error_snippet=error_snippet[:500],
             ))
-            return AgentLoopResult(
+            loop_result = AgentLoopResult(
                 success=False, total_attempts=attempt_num,
                 total_duration_secs=time.time() - loop_start,
                 attempts=attempts,
                 final_message=budget.exceeded_message,
             )
+            _log_build_result(workspace_path, platform, loop_result, budget)
+            return loop_result
 
         # Try fix with retry on Claude failure
         fix_result = None
@@ -217,19 +224,49 @@ async def run_agent_loop(
 
         if fix_result.exit_code != 0:
             error_detail = fix_result.stderr.strip() or fix_result.stdout.strip() or "Unknown error"
-            return AgentLoopResult(
+            loop_result = AgentLoopResult(
                 success=False, total_attempts=attempt_num,
                 total_duration_secs=time.time() - loop_start,
                 attempts=attempts,
                 final_message=f"🛑 Claude errored on fix:\n```\n{error_detail[:500]}\n```",
             )
+            _log_build_result(workspace_path, platform, loop_result, budget)
+            return loop_result
 
-    return AgentLoopResult(
+    loop_result = AgentLoopResult(
         success=False, total_attempts=max_attempts,
         total_duration_secs=time.time() - loop_start,
         attempts=attempts,
         final_message=f"🛑 Build failed after {max_attempts} attempts.\n```\n{last_error[:800]}\n```",
     )
+    _log_build_result(workspace_path, platform, loop_result, budget)
+    return loop_result
+
+
+def _log_build_result(
+    workspace_path: str,
+    platform: str,
+    result: AgentLoopResult,
+    budget: Optional[BudgetTracker],
+) -> None:
+    """Persist build result to workspace build log."""
+    try:
+        error = ""
+        for a in reversed(result.attempts):
+            if a.error_snippet:
+                error = a.error_snippet
+                break
+        log_build(
+            ws_path=workspace_path,
+            platform=platform,
+            success=result.success,
+            duration_secs=result.total_duration_secs,
+            attempts=result.total_attempts,
+            cost_usd=budget.total_cost_usd if budget else 0.0,
+            error=error,
+        )
+    except Exception:
+        pass  # never break the build loop over logging
 
 
 def format_loop_summary(result: AgentLoopResult) -> str:
