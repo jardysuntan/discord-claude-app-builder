@@ -185,6 +185,10 @@ def parse(text: str) -> ParseResult:
             case "/admin":
                 return Command(name="admin")
 
+            # ── Dashboard ─────────────────────────────────────────────
+            case "/history":
+                return Command(name="dashboard", raw_cmd=rest or None)
+
             # ── System ────────────────────────────────────────────────
             case "/setup":
                 return Command(name="setup")
