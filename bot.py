@@ -140,9 +140,9 @@ async def on_message(message: discord.Message):
     if not text and not has_images:
         return
 
-    # Image-only message: treat as a prompt describing the image
+    # Image-only message: treat as a visual bug report
     if not text and has_images:
-        text = "Look at the attached image(s) and describe what you see. If it looks like a bug or UI issue, suggest how to fix it."
+        text = "Fix the visual bug shown in the attached screenshot(s). Compare against the current app state and make the necessary code changes."
 
     parsed = msg_parser.parse(text)
     channel = message.channel
