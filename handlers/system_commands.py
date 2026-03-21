@@ -201,7 +201,13 @@ async def handle_unknown(ctx: BotContext, cmd: Command, channel, user_id: int, i
     await ctx.send(channel, "❓ Unknown command. `/help`")
 
 
+async def handle_smoketest(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
+    from commands.smoketest import handle_smoketest as _impl
+    await _impl(ctx, cmd, channel, user_id, is_admin)
+
+
 HANDLERS = {
+    "smoketest": handle_smoketest,
     "spend": handle_spend,
     "setup": handle_setup,
     "health": handle_health,
