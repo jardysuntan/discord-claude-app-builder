@@ -204,6 +204,8 @@ def parse(text: str) -> ParseResult:
                 return Command(name="maintenance", raw_cmd=rest or None)
             case "/announce":
                 return Command(name="announce", raw_cmd=rest or None)
+            case "/smoketest" | "/smoke-test":
+                return Command(name="smoketest")
             case "/testnewuser":
                 return Command(name="testnewuser")
             case "/testpublish":
