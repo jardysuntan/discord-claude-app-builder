@@ -94,6 +94,7 @@ MAX_BUILD_ATTEMPTS: int = int(os.getenv("MAX_BUILD_ATTEMPTS", "8"))
 MAX_FIX_BUDGET_USD: float = float(os.getenv("MAX_FIX_BUDGET_USD", "10"))
 SMOKETEST_CHANNEL_ID: int = int(os.getenv("SMOKETEST_CHANNEL_ID", "0"))
 MAX_TOTAL_INVOCATIONS: int = int(os.getenv("MAX_TOTAL_INVOCATIONS", "20"))
+AUTO_FIX_ON_FAILURE: bool = os.getenv("AUTO_FIX_ON_FAILURE", "1") == "1"
 
 
 def validate() -> list[str]:
