@@ -31,7 +31,7 @@ class FallbackPrompt:
 
 ParseResult = WorkspacePrompt | Command | FallbackPrompt
 
-PLATFORMS = {"android", "ios", "web"}
+PLATFORMS = {"android", "ios", "web", "all"}
 
 
 def _parse_platform(text: str) -> tuple[Optional[str], str]:
