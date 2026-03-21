@@ -21,9 +21,11 @@ from platforms import (
 from agent_loop import run_agent_loop, format_loop_summary
 from supabase_client import snapshot_sql_files, detect_changed_sql, sync_sql_files
 from views.interview_views import CancelRequestView
+from views.prompt_suggest_views import PromptSuggestView
 from helpers.ui_helpers import send_workspace_footer
 from helpers.pro_tips import pro_tip_embed, ProTipsDismissView, TIPS
 from helpers.web_screenshot import take_web_screenshot
+from helpers.prompt_suggest import suggest as suggest_prompt
 
 if TYPE_CHECKING:
     from bot_context import BotContext
@@ -106,6 +108,19 @@ async def handle_prompt(
             f"Read these files to see what they shared:\n{paths_str}\n\n{prompt}"
         )
         await ctx.send(channel, f"📎 {len(image_paths)} image(s) attached — Claude will review them.")
+
+    # ── Prompt suggestion ────────────────────────────────────────────────
+    if config.ENABLE_PROMPT_SUGGESTIONS and not image_paths:
+        suggestion = await suggest_prompt(prompt)
+        if suggestion and suggestion.strip() != prompt.strip():
+            view = PromptSuggestView(user_id)
+            await channel.send(
+                f"💡 **Suggested prompt:**\n> {suggestion}", view=view,
+            )
+            timed_out = await view.wait()
+            if not timed_out and view.choice == "suggested":
+                prompt = suggestion
+            # If timed out or "original", keep original prompt
 
     cancel_view = CancelRequestView(ctx, user_id, ws_key)
     cancel_msg = await channel.send(

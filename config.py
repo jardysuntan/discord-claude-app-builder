@@ -31,6 +31,9 @@ CLAUDE_TIMEOUT: int = int(os.getenv("CLAUDE_TIMEOUT", "180"))
 # ── Agent Mode ───────────────────────────────────────────────────────────────
 AGENT_MODE: bool = os.getenv("AGENT_MODE", "0") == "1"
 
+# ── Prompt Suggestions ──────────────────────────────────────────────────────
+ENABLE_PROMPT_SUGGESTIONS: bool = os.getenv("ENABLE_PROMPT_SUGGESTIONS", "1") == "1"
+
 # ── Android ──────────────────────────────────────────────────────────────────
 ADB_BIN: str = os.getenv("ADB_BIN", "adb")
 EMULATOR_BIN: str = os.getenv("EMULATOR_BIN", "emulator")
