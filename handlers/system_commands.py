@@ -198,7 +198,7 @@ async def handle_announce(ctx: BotContext, cmd: Command, channel, user_id: int, 
             await ctx.send(channel, f"📢 {cmd.raw_cmd}")
 
 
-async def handle_dashboard(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
+async def handle_history(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
     ws_key, ws_path = ctx.registry.resolve(None, user_id)
     if not ws_key or not ws_path:
         await ctx.send(channel, "❌ No workspace set. Use `/use <name>` first.")
@@ -228,6 +228,6 @@ HANDLERS = {
     "newsession": handle_newsession,
     "maintenance": handle_maintenance,
     "announce": handle_announce,
-    "dashboard": handle_dashboard,
+    "history": handle_history,
     "unknown": handle_unknown,
 }
