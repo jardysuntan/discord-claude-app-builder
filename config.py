@@ -92,6 +92,7 @@ MAX_DISCORD_MSG_LEN: int = 1900
 SCREEN_RECORD_SECONDS: int = int(os.getenv("SCREEN_RECORD_SECONDS", "15"))
 MAX_BUILD_ATTEMPTS: int = int(os.getenv("MAX_BUILD_ATTEMPTS", "8"))
 MAX_FIX_BUDGET_USD: float = float(os.getenv("MAX_FIX_BUDGET_USD", "10"))
+SMOKETEST_CHANNEL_ID: int = int(os.getenv("SMOKETEST_CHANNEL_ID", "0"))
 MAX_TOTAL_INVOCATIONS: int = int(os.getenv("MAX_TOTAL_INVOCATIONS", "20"))
 
 

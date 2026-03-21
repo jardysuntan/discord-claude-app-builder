@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
+import config
 from helpers.smoketest_runner import run_smoketest
 
 if TYPE_CHECKING:
@@ -42,6 +43,16 @@ async def handle_smoketest(
     )
 
     await ctx.send(channel, result.summary())
+
+    # Cross-post failures to reliability channel
+    if not result.success and config.SMOKETEST_CHANNEL_ID:
+        try:
+            import discord
+            reliability_ch = ctx.bot.get_channel(config.SMOKETEST_CHANNEL_ID)
+            if reliability_ch:
+                await reliability_ch.send(result.summary())
+        except Exception:
+            pass
 
 
 # ── Standalone entry-point ───────────────────────────────────────────────────
@@ -104,10 +115,11 @@ def main():
     parser = argparse.ArgumentParser(description="Run smoke test")
     parser.add_argument(
         "--channel", type=int, default=None,
-        help="Discord channel ID to post results to",
+        help="Discord channel ID to post results to (defaults to SMOKETEST_CHANNEL_ID)",
     )
     args = parser.parse_args()
-    asyncio.run(_run_standalone(args.channel))
+    channel_id = args.channel or config.SMOKETEST_CHANNEL_ID or None
+    asyncio.run(_run_standalone(channel_id))
 
 
 if __name__ == "__main__":

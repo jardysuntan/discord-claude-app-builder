@@ -57,8 +57,10 @@ class SmokeTestResult:
         secs = int(self.total_duration_secs % 60)
 
         lines = []
-        status = "PASS" if self.success else "FAIL"
-        lines.append(f"**Smoke Test: {status}**")
+        if self.success:
+            lines.append("✅ **Smoke Test: PASS**")
+        else:
+            lines.append("🚨 **Smoke Test: FAIL** 🚨")
         lines.append(f"  Total time: {mins}m {secs}s")
         lines.append(f"  Fix loops: {self.fix_loop_count}")
         lines.append(f"  Cost: ${self.total_cost_usd:.2f}")
