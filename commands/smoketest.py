@@ -42,7 +42,24 @@ async def handle_smoketest(
         owner_id=user_id,
     )
 
-    await ctx.send(channel, result.summary())
+    # Attempt auto-fix if smoke test failed
+    pr_url = None
+    if not result.success and config.AUTO_FIX_ON_FAILURE:
+        await ctx.send(channel, "🔧 Smoke test failed — attempting auto-fix...")
+        try:
+            from helpers.autofix import attempt_autofix
+            pr_url = attempt_autofix(result)
+            if pr_url:
+                await ctx.send(channel, f"✅ Auto-fix PR created: {pr_url}")
+            else:
+                await ctx.send(channel, "⚠️ Auto-fix could not produce a fix.")
+        except Exception as exc:
+            await ctx.send(channel, f"⚠️ Auto-fix error: {exc}")
+
+    summary = result.summary()
+    if pr_url:
+        summary += f"\n\n🔧 **Auto-fix PR:** {pr_url}"
+    await ctx.send(channel, summary)
 
     # Cross-post failures to reliability channel
     if not result.success and config.SMOKETEST_CHANNEL_ID:
@@ -50,7 +67,7 @@ async def handle_smoketest(
             import discord
             reliability_ch = ctx.bot.get_channel(config.SMOKETEST_CHANNEL_ID)
             if reliability_ch:
-                await reliability_ch.send(result.summary())
+                await reliability_ch.send(summary)
         except Exception:
             pass
 
@@ -85,8 +102,26 @@ async def _run_standalone(channel_id: Optional[int] = None) -> None:
         owner_id=_cfg.DISCORD_ALLOWED_USER_ID or None,
     )
 
+    # Attempt auto-fix if smoke test failed
+    pr_url = None
+    if not result.success and _cfg.AUTO_FIX_ON_FAILURE:
+        print("\n🔧 Smoke test failed — attempting auto-fix...")
+        try:
+            from helpers.autofix import attempt_autofix
+            pr_url = attempt_autofix(result)
+            if pr_url:
+                print(f"✅ Auto-fix PR created: {pr_url}")
+            else:
+                print("⚠️ Auto-fix could not produce a fix.")
+        except Exception as exc:
+            print(f"⚠️ Auto-fix error: {exc}")
+
+    summary = result.summary()
+    if pr_url:
+        summary += f"\n\n🔧 **Auto-fix PR:** {pr_url}"
+
     print("\n" + "=" * 60)
-    print(result.summary().replace("**", "").replace("`", ""))
+    print(summary.replace("**", "").replace("`", ""))
     print("=" * 60)
 
     # Post to Discord channel if requested
@@ -100,7 +135,7 @@ async def _run_standalone(channel_id: Optional[int] = None) -> None:
         async def on_ready():
             ch = client.get_channel(channel_id)
             if ch:
-                await ch.send(result.summary())
+                await ch.send(summary)
             await client.close()
 
         await client.start(_cfg.DISCORD_BOT_TOKEN)
