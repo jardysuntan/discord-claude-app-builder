@@ -95,7 +95,9 @@ async def on_member_join(member: discord.Member):
 
 @client.event
 async def on_message(message: discord.Message):
-    if message.author.bot:
+    # Allow trusted bots (e.g., Jablue/Aibert orchestration)
+    TRUSTED_BOTS = {1484031871586402364}  # Jablue bot user ID
+    if message.author.bot and message.author.id not in TRUSTED_BOTS:
         return
 
     # ── Play Store JSON key upload ────────────────────────────────────
