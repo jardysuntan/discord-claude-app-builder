@@ -20,36 +20,13 @@ if TYPE_CHECKING:
 async def handle_buildapp(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
     if not config.AGENT_MODE:
         await ctx.send(channel, "🔒 Agent mode OFF.")
-        return
-
-    prefill = cmd.raw_cmd or ""
-
-    # Trusted bots: skip button/modal flow, build directly
-    TRUSTED_BOTS = {1484031871586402364}  # Jablue bot user ID
-    if user_id in TRUSTED_BOTS and prefill:
-        from commands import buildapp as buildapp_mod
-
-        app_name = buildapp_mod.infer_app_name(prefill)
-
-        async def ba_status(msg, fpath=None):
-            await ctx.send(channel, msg, file_path=fpath)
-
-        slug = await buildapp_mod.handle_buildapp(
-            prefill, ctx.registry, ctx.claude, ba_status,
-            on_ask=None, is_admin=True, owner_id=user_id,
-            app_name=app_name,
+    else:
+        prefill = cmd.raw_cmd or ""
+        view = _BuildAppView(ctx, channel, user_id, is_admin, prefill)
+        await channel.send(
+            "**Let's build an app!** Tap the button to get started.",
+            view=view,
         )
-        if slug:
-            ctx.registry.set_default(user_id, slug)
-            await ctx.send(channel, f"📂 Switched to **{slug}**")
-        return
-
-    # Human users: show button + modal flow
-    view = _BuildAppView(ctx, channel, user_id, is_admin, prefill)
-    await channel.send(
-        "**Let's build an app!** Tap the button to get started.",
-        view=view,
-    )
 
 
 async def handle_platform(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:

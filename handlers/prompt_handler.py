@@ -38,43 +38,23 @@ if TYPE_CHECKING:
 
 
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
-_TEXT_EXTENSIONS = {".txt", ".md", ".csv", ".json", ".xml", ".yml", ".yaml",
-                    ".kt", ".swift", ".py", ".js", ".ts", ".html", ".css",
-                    ".sql", ".toml", ".ini", ".cfg", ".log", ".env.example"}
-_MAX_TEXT_SIZE = 50_000  # 50KB max per text file
 
 
-async def _save_attachments(attachments, ws_path: str) -> tuple[list[str], list[tuple[str, str]]]:
-    """Download attachments to workspace.
-
-    Returns (image_paths, text_files) where text_files is [(filename, content)].
-    """
+async def _save_attachments(attachments, ws_path: str) -> list[str]:
+    """Download image attachments to workspace, return list of saved paths."""
     if not attachments:
-        return [], []
+        return []
     from pathlib import Path
     upload_dir = Path(ws_path) / "_discord_uploads"
     upload_dir.mkdir(exist_ok=True)
-    images = []
-    texts = []
+    saved = []
     for att in attachments:
         ext = Path(att.filename).suffix.lower()
         if ext in _IMAGE_EXTENSIONS:
             dest = upload_dir / att.filename
             await att.save(dest)
-            images.append(str(dest))
-        elif ext in _TEXT_EXTENSIONS or att.content_type and att.content_type.startswith("text/"):
-            if att.size and att.size > _MAX_TEXT_SIZE:
-                continue
-            try:
-                raw = await att.read()
-                content = raw.decode("utf-8", errors="ignore")
-                # Also save to disk so Claude can reference it
-                dest = upload_dir / att.filename
-                dest.write_text(content)
-                texts.append((att.filename, content))
-            except Exception:
-                continue
-    return images, texts
+            saved.append(str(dest))
+    return saved
 
 
 async def handle_prompt(
@@ -124,8 +104,8 @@ async def handle_prompt(
             "Google Maps will be supported in a future update."
         )
 
-    # Download attachments and augment prompt
-    image_paths, text_files = await _save_attachments(attachments, ws_path)
+    # Download image attachments and augment prompt with visual comparison
+    image_paths = await _save_attachments(attachments, ws_path)
     if image_paths:
         await ctx.send(channel, f"📎 {len(image_paths)} image(s) attached — capturing current app state…")
         route = _guess_route_from_text(prompt)
@@ -134,18 +114,9 @@ async def handle_prompt(
             await ctx.send(channel, f"📸 Captured current app at `{route}` for comparison.")
         diff_prompt = build_visual_diff_prompt(image_paths, bot_screenshot)
         prompt = f"{diff_prompt}\n\nUser message: {prompt}"
-    if text_files:
-        file_sections = []
-        for fname, content in text_files:
-            file_sections.append(f"--- {fname} ---\n{content}")
-        prompt = (
-            f"The user attached {len(text_files)} file(s). Here are their contents:\n\n"
-            + "\n\n".join(file_sections) + f"\n\n{prompt}"
-        )
-        await ctx.send(channel, f"📎 {len(text_files)} file(s) attached — Claude will read them.")
 
     # ── Prompt suggestion ────────────────────────────────────────────────
-    if config.ENABLE_PROMPT_SUGGESTIONS and not image_paths and not text_files:
+    if config.ENABLE_PROMPT_SUGGESTIONS and not image_paths:
         suggestion = await suggest_prompt(prompt)
         if suggestion and suggestion.strip() != prompt.strip():
             view = PromptSuggestView(user_id)

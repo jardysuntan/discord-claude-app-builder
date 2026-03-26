@@ -95,14 +95,8 @@ async def on_member_join(member: discord.Member):
 
 @client.event
 async def on_message(message: discord.Message):
-    # Allow trusted bots only in designated build channels
-    TRUSTED_BOTS = {1484031871586402364}  # Jablue bot user ID
-    TRUSTED_BOT_CHANNELS = {1486594210277888095}  # #builds channel
     if message.author.bot:
-        if message.author.id in TRUSTED_BOTS and message.channel.id in TRUSTED_BOT_CHANNELS:
-            pass  # Allow through
-        else:
-            return
+        return
 
     # ── Play Store JSON key upload ────────────────────────────────────
     uid = message.author.id
@@ -168,9 +162,7 @@ async def on_message(message: discord.Message):
         return
 
     # ── Everything below: DM-only, allowed users ────────────────────────
-    # Exception: trusted bots can use designated guild channels (Jablue orchestration)
-    is_trusted_bot = message.author.bot and message.author.id in TRUSTED_BOTS
-    if not is_dm and not is_trusted_bot:
+    if not is_dm:
         return
 
     # Auto-approve: if user shares a guild with the bot, add them automatically

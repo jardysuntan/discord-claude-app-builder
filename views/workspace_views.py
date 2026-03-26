@@ -97,7 +97,6 @@ class WorkspaceButton(discord.ui.Button):
                     self.ctx, self.owner_id, self.ws_key, _btn_ws_path, _btn_app, _btn_pkg,
                 )
                 await interaction.channel.send(
-                    content="Friendly reminder — you have an incomplete Play Store setup:",
                     embed=_playstore_checklist_embed(
                         self.ws_key, _btn_app, _btn_pkg, _btn_view.state,
                     ),
