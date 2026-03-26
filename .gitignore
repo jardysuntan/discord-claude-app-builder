@@ -40,3 +40,4 @@ worklog.md
 
 # Nightly research (machine-specific)
 scripts/nightly-research.sh
+smoketest-results/

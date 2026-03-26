@@ -164,7 +164,8 @@ async def on_message(message: discord.Message):
         return
 
     # ── Everything below: DM-only, allowed users ────────────────────────
-    if not is_dm:
+    # Exception: trusted bots can use guild channels too (Jablue orchestration)
+    if not is_dm and not (message.author.bot and message.author.id in TRUSTED_BOTS):
         return
 
     # Auto-approve: if user shares a guild with the bot, add them automatically
