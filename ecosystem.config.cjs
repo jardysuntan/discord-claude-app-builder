@@ -10,5 +10,16 @@ module.exports = {
     max_restarts: 10,
     restart_delay: 3000,
     env: { PYTHONUNBUFFERED: "1" },
+  }, {
+    name: "app-builder-api",
+    script: "api.py",
+    interpreter: "/opt/homebrew/bin/python3.12",
+    cwd: __dirname,
+    watch: ["api.py", "service.py"],
+    watch_delay: 2000,
+    ignore_watch: ["__pycache__", "*.pyc"],
+    max_restarts: 10,
+    restart_delay: 3000,
+    env: { PYTHONUNBUFFERED: "1" },
   }],
 };

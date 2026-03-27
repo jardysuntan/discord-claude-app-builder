@@ -12,11 +12,20 @@ venv/
 # Keys / secrets
 keys/
 allowlist.json
+.api-token
+
+# Cloudflare
+.wrangler/
 
 # Runtime state
 workspaces.json
 workspaces.json.bak
 cost_tracker.json
+claude_sessions.json
+app_plans.json
+
+# Smoke test logs
+smoketest-results/
 
 # Claude local settings
 .claude/

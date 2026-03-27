@@ -168,6 +168,7 @@ def attempt_autofix(result: SmokeTestResult) -> Optional[str]:
         )
         pr_url = pr_result.stdout.strip()
         log.info("autofix: PR created — %s", pr_url)
+        subprocess.run(["git", "checkout", "main"], cwd=BOT_REPO, capture_output=True, text=True)
         return pr_url
     except subprocess.CalledProcessError as exc:
         log.error("autofix: gh pr create failed: %s", exc.stderr)

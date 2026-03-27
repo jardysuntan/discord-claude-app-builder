@@ -181,20 +181,96 @@ handlers/
 helpers/
   demo_runner.py        # Platform demo orchestration
   web_screenshot.py     # Playwright headless screenshots
+  smoketest_runner.py   # Multi-scenario smoke test engine
+  api_smoketest.py      # API endpoint smoke tests
+  autofix.py            # Auto-fix PR on smoke test failure
   pro_tips.py           # Pro tips embed + dismiss
   ui_helpers.py         # Help text, workspace footer
 commands/
   create.py             # Project scaffolding + CLAUDE.md template
   buildapp.py           # /buildapp full pipeline
+  smoketest.py          # /smoketest command + standalone CLI
   git_cmd.py            # Git operations
   testflight.py         # iOS TestFlight upload
   playstore.py          # Google Play upload
   queue.py              # Batch task queue
+api.py                  # REST API server (port 8100)
 templates/
   kmp/KMPTemplate/      # KMP project template (copied per new app)
 ```
 
 </details>
+
+## Smoke Tests
+
+Automated smoke tests verify the full buildapp pipeline end-to-end. Three scenarios are available:
+
+| Scenario | What it builds |
+|----------|---------------|
+| `counter` | Counter app with increment/decrement/reset buttons |
+| `map` | Location finder with Leaflet.js map and coffee shop markers |
+| `video` | TikTok-style vertical video feed with play/pause |
+
+Each scenario runs the full pipeline: scaffold → Claude code gen → Android build → Web build → screenshot.
+
+```bash
+# Run a single scenario
+python -m commands.smoketest --scenario counter
+
+# Run all scenarios
+python -m commands.smoketest --scenario all
+
+# Run API endpoint tests only
+python -m commands.smoketest --api
+
+# Run everything (nightly default)
+python -m commands.smoketest --scenario all --api
+```
+
+From Discord (admin only): `/smoketest`
+
+On failure, the autofix system automatically creates a PR with a Claude-generated fix attempt.
+
+A nightly cron runs `scripts/nightly-smoketest.sh` and posts results to the `#smoke-tests` channel.
+
+## API
+
+A private REST API runs alongside the bot on port 8100 for programmatic access to all bot functionality.
+
+**Auth:** Bearer token (auto-generated on first run, stored in `.api-token`).
+
+**Base URL:** `http://localhost:8100/api/v1`
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/health` | Health check (no auth) |
+| `POST` | `/buildapp` | Build a full app from a description |
+| `GET` | `/builds/{build_id}` | Poll build status |
+| `POST` | `/planapp` | Generate an app plan from a description |
+| `GET` | `/workspaces` | List all workspaces |
+| `GET` | `/workspaces/{slug}` | Get workspace details |
+| `PATCH` | `/workspaces/{slug}` | Rename workspace |
+| `DELETE` | `/workspaces/{slug}` | Delete workspace |
+| `POST` | `/workspaces/{slug}/prompt` | Send a prompt to Claude |
+| `POST` | `/workspaces/{slug}/build` | Build for a specific platform |
+| `POST` | `/workspaces/{slug}/demo` | Run a demo |
+| `POST` | `/workspaces/{slug}/save` | Save workspace |
+| `POST` | `/workspaces/{slug}/use` | Switch active workspace |
+| `POST` | `/workspaces/{slug}/newsession` | Reset Claude session |
+| `POST` | `/workspaces/{slug}/appraise` | Run quality appraisal |
+| `GET` | `/workspaces/{slug}/git/status` | Git status |
+| `GET` | `/workspaces/{slug}/git/diff` | Git diff |
+| `GET` | `/workspaces/{slug}/git/log` | Git log |
+| `POST` | `/workspaces/{slug}/git/commit` | Commit changes |
+| `POST` | `/workspaces/{slug}/git/undo` | Revert last commit |
+| `POST` | `/workspaces/{slug}/git/branch` | List/create branches |
+| `POST` | `/workspaces/{slug}/git/stash` | Stash/pop changes |
+| `GET` | `/workspaces/{slug}/saves` | List save history |
+| `POST` | `/workspaces/{slug}/saves/undo` | Undo last save |
+
+Interactive docs at `http://localhost:8100/api/docs` when the server is running.
+
+> **Note:** The API is currently private (localhost only). Public access is planned for a future release.
 
 ## All Commands
 

@@ -96,7 +96,7 @@ def _friendly_bash(cmd: str, last_text: str) -> Optional[str]:
     return f"⚙️ Running a command…"
 
 
-def _progress_from_event(event: dict, state: dict | None = None) -> Optional[str]:
+def _progress_from_event(event: dict, state: Optional[dict] = None) -> Optional[str]:
     """Extract a human-readable progress message from a stream-json event.
 
     Filters out investigation noise (Read/Glob/Grep, exploratory bash) and text blocks.
