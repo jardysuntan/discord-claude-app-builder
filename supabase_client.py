@@ -16,11 +16,14 @@ import config
 _TIMEOUT = aiohttp.ClientTimeout(total=30)
 
 
-async def run_sql(sql: str) -> tuple[bool, str]:
+async def run_sql(sql: str, schema: Optional[str] = None) -> tuple[bool, str]:
     """Execute SQL via the Supabase Management API.
 
+    If schema is provided, prepend SET search_path to route tables to that schema.
     Returns (success, error_message_or_empty).
     """
+    if schema:
+        sql = f"SET search_path TO {schema}, public;\n{sql}"
     url = f"https://api.supabase.com/v1/projects/{config.SUPABASE_PROJECT_REF}/database/query"
     headers = {
         "Authorization": f"Bearer {config.SUPABASE_MANAGEMENT_KEY}",
@@ -41,8 +44,13 @@ async def run_sql(sql: str) -> tuple[bool, str]:
         return (False, f"Unexpected error: {e}")
 
 
-async def query_sql(sql: str):
-    """Execute SQL and return rows. Returns (True, [rows]) or (False, error)."""
+async def query_sql(sql: str, schema: Optional[str] = None):
+    """Execute SQL and return rows. Returns (True, [rows]) or (False, error).
+
+    If schema is provided, prepend SET search_path to route tables to that schema.
+    """
+    if schema:
+        sql = f"SET search_path TO {schema}, public;\n{sql}"
     url = f"https://api.supabase.com/v1/projects/{config.SUPABASE_PROJECT_REF}/database/query"
     headers = {
         "Authorization": f"Bearer {config.SUPABASE_MANAGEMENT_KEY}",
@@ -204,9 +212,10 @@ def detect_changed_sql(before: dict[str, float], workspace_path: str) -> list[st
     return changed
 
 
-async def sync_sql_files(changed_files: list[str]) -> tuple[bool, str]:
+async def sync_sql_files(changed_files: list[str], schema: Optional[str] = None) -> tuple[bool, str]:
     """Execute changed SQL files against Supabase sequentially.
 
+    If schema is provided, each file's SQL is executed within that schema's search_path.
     Returns (all_ok, status_message) with per-file results.
     """
     results = []
@@ -236,7 +245,7 @@ async def sync_sql_files(changed_files: list[str]) -> tuple[bool, str]:
         # Guardrail: patch CREATE TABLE/INDEX to be idempotent
         sql = patch_idempotent(sql)
 
-        ok, err = await run_sql(sql)
+        ok, err = await run_sql(sql, schema=schema)
         if ok:
             results.append(f"✅ {name}")
         else:

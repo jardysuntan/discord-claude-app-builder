@@ -166,6 +166,20 @@ class WorkspaceRegistry:
             return None
         return entry.get("path") if isinstance(entry, dict) else entry
 
+    def get_schema(self, key: str) -> Optional[str]:
+        """Return the Postgres schema name for this workspace, or None."""
+        entry = self._workspaces.get(key.lower())
+        if not entry or not isinstance(entry, dict):
+            return None
+        return entry.get("supabase_schema")
+
+    def set_schema(self, key: str, schema_name: str):
+        """Store the Postgres schema name for a workspace."""
+        entry = self._workspaces.get(key.lower())
+        if entry and isinstance(entry, dict):
+            entry["supabase_schema"] = schema_name
+            self._save()
+
     def exists(self, key: str) -> bool:
         return key.lower() in self._workspaces
 
