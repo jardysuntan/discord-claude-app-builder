@@ -27,6 +27,38 @@ class SkipDataInterviewView(discord.ui.View):
         await interaction.response.defer()
 
 
+class NameSuggestionView(discord.ui.View):
+    """Buttons for alternative CF Pages names, plus an auto-pick fallback."""
+
+    def __init__(self, choices: list[str]):
+        super().__init__(timeout=120)
+        self.chosen: str | None = None
+        for name in choices[:4]:  # Discord max 5 buttons; reserve none for skip
+            self.add_item(_NameButton(name))
+        self.add_item(_AutoPickButton())
+
+
+class _NameButton(discord.ui.Button):
+    def __init__(self, name: str):
+        super().__init__(label=name, style=discord.ButtonStyle.primary)
+        self.name = name
+
+    async def callback(self, interaction: discord.Interaction):
+        self.view.chosen = self.name
+        self.view.stop()
+        await interaction.response.defer()
+
+
+class _AutoPickButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="Pick for me", style=discord.ButtonStyle.secondary)
+
+    async def callback(self, interaction: discord.Interaction):
+        self.view.chosen = None  # signals auto-resolve
+        self.view.stop()
+        await interaction.response.defer()
+
+
 class CancelRequestView(discord.ui.View):
     """Cancel button shown while Claude is processing a request."""
 

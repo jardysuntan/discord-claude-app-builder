@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 import discord
 
 from commands import buildapp
-from views.interview_views import SkipDataInterviewView
+from views.interview_views import SkipDataInterviewView, NameSuggestionView
 
 if TYPE_CHECKING:
     from bot_context import BotContext
@@ -53,8 +53,11 @@ class _BuildAppModal(discord.ui.Modal, title="Build a new app"):
         async def ba_status(msg, fpath=None):
             await self.ctx.send(self.channel, msg, file_path=fpath)
 
-        async def ba_ask(question: str) -> str | None:
-            view = SkipDataInterviewView()
+        async def ba_ask(question: str, *, choices: list[str] | None = None) -> str | None:
+            if choices:
+                view = NameSuggestionView(choices)
+            else:
+                view = SkipDataInterviewView()
             q_msg = await self.channel.send(question, view=view)
             pair = (self.channel.id, self.user_id)
             self.ctx.interview_pending.add(pair)
@@ -71,9 +74,9 @@ class _BuildAppModal(discord.ui.Modal, title="Build a new app"):
                 wait_msg = asyncio.ensure_future(
                     self.ctx.client.wait_for("message", check=check, timeout=120)
                 )
-                wait_skip = asyncio.ensure_future(view.wait())
+                wait_btn = asyncio.ensure_future(view.wait())
                 done, pending = await asyncio.wait(
-                    {wait_msg, wait_skip}, return_when=asyncio.FIRST_COMPLETED
+                    {wait_msg, wait_btn}, return_when=asyncio.FIRST_COMPLETED
                 )
                 for t in pending:
                     t.cancel()
@@ -83,7 +86,11 @@ class _BuildAppModal(discord.ui.Modal, title="Build a new app"):
                     view.stop()
                     await q_msg.edit(view=None)
                     return reply.content.strip() or None
+
+                # A button was pressed
                 await q_msg.edit(view=None)
+                if choices and hasattr(view, "chosen"):
+                    return view.chosen  # str if they picked a name, None for auto-pick
                 return None
             except asyncio.TimeoutError:
                 await q_msg.edit(view=None)

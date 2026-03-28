@@ -160,6 +160,38 @@ async def handle_buildapp(
     if not app_name:
         app_name = infer_app_name(description)
 
+    # ── Cloudflare Pages name check ──
+    from commands.create import slugify
+    from helpers.cf_pages import (
+        cf_project_name, check_cf_name_available,
+        find_available_name, generate_alternatives,
+    )
+
+    slug_candidate = slugify(app_name)
+    cf_name = cf_project_name(slug_candidate)
+    cf_status = await check_cf_name_available(cf_name)
+
+    if cf_status == "taken":
+        if on_ask:  # Discord interactive
+            alts = generate_alternatives(slug_candidate, count=3)
+            reply = await on_ask(
+                f"**The name `{slug_candidate}` is already taken on pages.dev.**\n\n"
+                f"Pick a suggestion, or type a custom name:",
+                choices=alts,
+            )
+            if reply:
+                app_name = reply.strip()
+                new_cf = cf_project_name(slugify(app_name))
+                if await check_cf_name_available(new_cf) == "taken":
+                    app_name, _ = await find_available_name(slugify(app_name))
+                    await on_status(f"That's also taken. Using **{app_name}**.", None)
+            else:
+                app_name, _ = await find_available_name(slug_candidate)
+                await on_status(f"Using **{app_name}** instead.", None)
+        else:  # API non-interactive — auto-resolve
+            app_name, _ = await find_available_name(slug_candidate)
+            await on_status(f"Name `{slug_candidate}` taken. Using **{app_name}**.", None)
+
     # 1. Scaffold
     await on_status(f"🏗️ Creating **{app_name}** (Kotlin Multiplatform)...", None)
     await on_status("💡 *I'm still listening — feel free to send other commands while this runs.*", None)

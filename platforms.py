@@ -864,7 +864,10 @@ class WebPlatform:
             stderr=asyncio.subprocess.PIPE,
             env=env,
         )
-        await asyncio.wait_for(create_proc.communicate(), timeout=30)
+        create_out, create_err = await asyncio.wait_for(create_proc.communicate(), timeout=30)
+        if create_proc.returncode and create_proc.returncode != 0:
+            detail = (create_err or create_out or b"").decode(errors="replace")[:300]
+            print(f"[CF Pages] project create failed for '{project}' (rc={create_proc.returncode}): {detail}")
 
         proc = await asyncio.create_subprocess_exec(
             "npx", "wrangler", "pages", "deploy", str(dist_dir),
