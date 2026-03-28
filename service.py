@@ -43,6 +43,7 @@ class BuildStatus:
     platforms: dict = field(default_factory=dict)
     elapsed_seconds: int = 0
     logs: list[str] = field(default_factory=list)
+    webhook_url: str | None = None  # fires on completion
 
 @dataclass
 class PromptRequest:
@@ -62,6 +63,72 @@ class WorkspaceInfo:
 _registry: WorkspaceRegistry | None = None
 _claude: ClaudeRunner | None = None
 _builds: dict[str, BuildStatus] = {}
+
+# ── Analytics tracking ───────────────────────────────────────────────────────
+
+_analytics: dict = {
+    "total_builds": 0,
+    "successes": 0,
+    "failures": 0,
+    "total_duration_secs": 0,
+    "by_operation": {},  # buildapp, prompt, demo, build, appraise
+    "by_workspace": {},  # slug -> {total, successes, failures}
+}
+
+
+def _track_build(operation: str, slug: str, success: bool, duration_secs: int):
+    """Record a completed build for analytics."""
+    _analytics["total_builds"] += 1
+    _analytics["total_duration_secs"] += duration_secs
+    if success:
+        _analytics["successes"] += 1
+    else:
+        _analytics["failures"] += 1
+
+    op = _analytics["by_operation"].setdefault(operation, {"total": 0, "successes": 0, "failures": 0, "total_duration": 0})
+    op["total"] += 1
+    op["total_duration"] += duration_secs
+    if success:
+        op["successes"] += 1
+    else:
+        op["failures"] += 1
+
+    ws = _analytics["by_workspace"].setdefault(slug, {"total": 0, "successes": 0, "failures": 0})
+    ws["total"] += 1
+    if success:
+        ws["successes"] += 1
+    else:
+        ws["failures"] += 1
+
+
+def get_analytics() -> dict:
+    """Return build analytics summary."""
+    total = _analytics["total_builds"]
+    return {
+        **_analytics,
+        "success_rate": round(_analytics["successes"] / total * 100, 1) if total else 0,
+        "avg_duration_secs": round(_analytics["total_duration_secs"] / total) if total else 0,
+    }
+
+
+async def _fire_webhook(status: BuildStatus):
+    """Fire webhook if configured on this build."""
+    if not status.webhook_url:
+        return
+    try:
+        import httpx
+        async with httpx.AsyncClient() as client:
+            await client.post(status.webhook_url, json={
+                "build_id": status.build_id,
+                "status": status.status,
+                "slug": status.slug,
+                "phase": status.phase,
+                "message": status.message,
+                "elapsed_seconds": status.elapsed_seconds,
+                "platforms": status.platforms,
+            }, timeout=10)
+    except Exception as e:
+        logger.warning(f"Webhook failed for {status.build_id}: {e}")
 
 
 def init(registry: WorkspaceRegistry | None = None, claude: ClaudeRunner | None = None):
@@ -160,19 +227,8 @@ async def build_app(request: BuildRequest) -> BuildStatus:
             status.message = f"Build error: {e}"
             status.elapsed_seconds = int(time.time() - start)
 
-        # Fire webhook if configured
-        if request.webhook_url:
-            try:
-                import httpx
-                async with httpx.AsyncClient() as client:
-                    await client.post(request.webhook_url, json={
-                        "build_id": build_id,
-                        "status": status.status,
-                        "slug": status.slug,
-                        "message": status.message,
-                    }, timeout=10)
-            except Exception as e:
-                logger.warning(f"Webhook failed: {e}")
+        _track_build("buildapp", status.slug or "unknown", status.status == "success", status.elapsed_seconds)
+        await _fire_webhook(status)
 
     asyncio.create_task(_run_build())
     return status
@@ -222,6 +278,9 @@ async def send_prompt(request: PromptRequest) -> BuildStatus:
             status.status = "failed"
             status.phase = "complete"
             status.message = f"Error: {e}"
+
+        _track_build("prompt", slug, status.status == "success", status.elapsed_seconds)
+        await _fire_webhook(status)
 
     asyncio.create_task(_run())
     return status
@@ -275,7 +334,7 @@ async def demo_workspace(slug: str, platform: str = "web") -> BuildStatus:
     async def _run():
         start = time.time()
         try:
-            result = await demo_platform(platform, ws_path)
+            result = await demo_platform(platform, ws_path, workspace_key=slug)
             status.status = "success" if result.success else "failed"
             status.message = result.message
             status.phase = "complete"
@@ -287,6 +346,9 @@ async def demo_workspace(slug: str, platform: str = "web") -> BuildStatus:
             status.status = "failed"
             status.phase = "complete"
             status.message = f"Error: {e}"
+
+        _track_build("demo", slug, status.status == "success", status.elapsed_seconds)
+        await _fire_webhook(status)
 
     asyncio.create_task(_run())
     return status
@@ -355,6 +417,9 @@ async def build_workspace_platform(slug: str, platform: str = "web") -> BuildSta
             status.phase = "complete"
             status.message = f"Error: {e}"
 
+        _track_build("build", slug, status.status == "success", status.elapsed_seconds)
+        await _fire_webhook(status)
+
     asyncio.create_task(_run())
     return status
 
@@ -400,6 +465,9 @@ async def appraise_workspace(slug: str) -> BuildStatus:
             status.status = "failed"
             status.phase = "complete"
             status.message = f"Error: {e}"
+
+        _track_build("appraise", slug, status.status == "success", status.elapsed_seconds)
+        await _fire_webhook(status)
 
     asyncio.create_task(_run())
     return status
@@ -470,6 +538,12 @@ async def save_workspace(slug: str, message: str | None = None) -> dict:
     ws_path = registry.get_path(slug)
     if not ws_path:
         raise ValueError(f"Workspace '{slug}' not found")
+
+    # Ensure git repo exists (workspaces created via API may not have one)
+    from commands.git_cmd import ensure_git_repo
+    ok, git_msg = await ensure_git_repo(ws_path)
+    if not ok:
+        return {"slug": slug, "saved": False, "message": f"Git init failed: {git_msg}"}
 
     proc = await asyncio.create_subprocess_exec(
         "git", "add", "-A",

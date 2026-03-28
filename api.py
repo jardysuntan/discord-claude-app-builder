@@ -78,12 +78,14 @@ class BuildAppRequest(BaseModel):
 
 class PromptRequestModel(BaseModel):
     prompt: str
+    webhook_url: str | None = None
 
 class SaveRequest(BaseModel):
     message: str | None = None
 
 class DemoRequest(BaseModel):
     platform: str = "web"
+    webhook_url: str | None = None
 
 class BuildStatusResponse(BaseModel):
     build_id: str
@@ -106,6 +108,7 @@ class RenameRequest(BaseModel):
 
 class PlatformBuildRequest(BaseModel):
     platform: str = "web"
+    webhook_url: str | None = None
 
 class PlanAppRequest(BaseModel):
     description: str
@@ -172,6 +175,7 @@ async def send_prompt(slug: str, req: PromptRequestModel):
     """Send a prompt to a workspace. Returns build_id for polling."""
     try:
         status = await service.send_prompt(service.PromptRequest(workspace=slug, prompt=req.prompt))
+        status.webhook_url = req.webhook_url
         return _status_to_response(status)
     except ValueError as e:
         raise HTTPException(404, str(e))
@@ -182,6 +186,7 @@ async def demo(slug: str, req: DemoRequest = DemoRequest()):
     """Trigger a demo build for a workspace."""
     try:
         status = await service.demo_workspace(slug, req.platform)
+        status.webhook_url = req.webhook_url
         return _status_to_response(status)
     except ValueError as e:
         raise HTTPException(404, str(e))
@@ -242,6 +247,7 @@ async def build_workspace(slug: str, req: PlatformBuildRequest = PlatformBuildRe
     """Build workspace for a specific platform. Returns build_id for polling."""
     try:
         status = await service.build_workspace_platform(slug, req.platform)
+        status.webhook_url = req.webhook_url
         return _status_to_response(status)
     except ValueError as e:
         raise HTTPException(404, str(e))
@@ -358,6 +364,96 @@ async def undo_save(slug: str):
         return GitResponse(output=output)
     except ValueError as e:
         raise HTTPException(404, str(e))
+
+
+# ── Smoke Tests ─────────────────────────────────────────────────────────────
+
+class SmokeTestRequest(BaseModel):
+    scenario: str | None = None  # "counter", "map", "video", or None for all
+    api_tests: bool = False       # Also run API endpoint checks
+
+@app.post("/api/v1/smoketest", dependencies=[Depends(verify_token)])
+async def run_smoketest_endpoint(req: SmokeTestRequest = SmokeTestRequest()):
+    """Kick off smoke tests. Returns a build_id for polling status."""
+    import uuid
+    import time as _time
+
+    build_id = str(uuid.uuid4())[:8]
+    status = BuildStatusResponse(
+        build_id=build_id,
+        slug="smoketest",
+        status="running",
+        phase="starting",
+        message="Smoke test starting...",
+    )
+    _smoketest_results[build_id] = status
+
+    async def _run():
+        from helpers.smoketest_runner import run_smoketest, SCENARIO_NAMES
+        from workspaces import WorkspaceRegistry
+        from claude_runner import ClaudeRunner
+
+        registry = WorkspaceRegistry()
+        claude = ClaudeRunner()
+        scenarios = [req.scenario] if req.scenario and req.scenario in SCENARIO_NAMES else None
+        logs = []
+
+        async def on_status(msg, file_path=None):
+            cleaned = msg.replace("**", "").replace("`", "")
+            logs.append(cleaned)
+            status.logs = logs[-20:]  # keep last 20
+            status.message = cleaned
+
+        try:
+            result = await run_smoketest(
+                registry=registry,
+                claude=claude,
+                on_status=on_status,
+                is_admin=False,
+                scenarios=scenarios,
+            )
+            status.status = "success" if result.success else "failed"
+            status.phase = "complete"
+            status.message = result.summary()
+            status.logs = logs
+
+            # Run API tests if requested
+            if req.api_tests:
+                from helpers.api_smoketest import run_api_smoketest
+                port = os.getenv("API_PORT", "8100")
+                api_result = await run_api_smoketest(
+                    base_url=f"http://localhost:{port}",
+                    token=API_TOKEN,
+                )
+                status.message += "\n\n" + api_result.summary()
+                if not api_result.success:
+                    status.status = "failed"
+        except Exception as e:
+            logger.exception(f"[smoketest:{build_id}] Failed")
+            status.status = "failed"
+            status.phase = "complete"
+            status.message = f"Error: {e}"
+
+    import asyncio
+    asyncio.create_task(_run())
+    return status
+
+@app.get("/api/v1/smoketest/{build_id}", dependencies=[Depends(verify_token)])
+async def get_smoketest_status(build_id: str):
+    """Poll smoke test status."""
+    if build_id not in _smoketest_results:
+        raise HTTPException(404, f"Smoke test '{build_id}' not found")
+    return _smoketest_results[build_id]
+
+_smoketest_results: dict[str, BuildStatusResponse] = {}
+
+
+# ── Analytics ────────────────────────────────────────────────────────────────
+
+@app.get("/api/v1/analytics", dependencies=[Depends(verify_token)])
+async def analytics():
+    """Build analytics: success rates, avg durations, per-workspace and per-operation breakdowns."""
+    return service.get_analytics()
 
 
 # ── Health ──────────────────────────────────────────────────────────────────

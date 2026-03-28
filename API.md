@@ -314,6 +314,60 @@ curl -X POST http://localhost:8100/api/v1/workspaces/todolist/saves/undo \
   -H "Authorization: Bearer $TOKEN"
 ```
 
+### Analytics
+
+#### GET /api/v1/analytics
+
+Build analytics: success rates, average durations, per-workspace and per-operation breakdowns.
+
+```bash
+curl http://localhost:8100/api/v1/analytics \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+**Response:**
+```json
+{
+  "total_builds": 42,
+  "successes": 35,
+  "failures": 7,
+  "success_rate": 83.3,
+  "avg_duration_secs": 120,
+  "total_duration_secs": 5040,
+  "by_operation": {
+    "buildapp": {"total": 15, "successes": 12, "failures": 3, "total_duration": 2400},
+    "prompt": {"total": 20, "successes": 18, "failures": 2, "total_duration": 1800}
+  },
+  "by_workspace": {
+    "todolist": {"total": 8, "successes": 7, "failures": 1}
+  }
+}
+```
+
+### Webhooks
+
+All async operations (`buildapp`, `prompt`, `demo`, `build`) accept an optional `webhook_url` field. When the operation completes (success or failure), a POST is sent to that URL with the full build status payload:
+
+```json
+{
+  "build_id": "abc123",
+  "status": "success",
+  "slug": "todolist",
+  "phase": "complete",
+  "message": "Build complete",
+  "elapsed_seconds": 95,
+  "platforms": {}
+}
+```
+
+Example:
+```bash
+curl -X POST http://localhost:8100/api/v1/workspaces/todolist/prompt \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "Add dark mode", "webhook_url": "https://example.com/hook"}'
+```
+
 ### Health
 
 #### GET /api/v1/health
