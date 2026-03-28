@@ -16,6 +16,7 @@ from agent_loop import run_agent_loop, format_loop_summary
 from commands.create import create_kmp_project
 from platforms import AndroidPlatform, iOSPlatform, WebPlatform
 from supabase_client import run_sql, extract_sql
+from helpers.schema_manager import schema_name_for_workspace, ensure_schema, set_search_path_sql
 import glob
 import os
 
@@ -64,8 +65,10 @@ generate a PostgreSQL schema for Supabase.
 App name: {app_name}
 Description: {description}
 {data_section}
+{schema_section}
 Rules:
 - Output ONLY a single SQL block (```sql ... ```) — no explanation.
+- {search_path_instruction}
 - Use CREATE TABLE IF NOT EXISTS.
 - Use "camelCase" quoted column names so Kotlin @Serializable data classes work
   without @SerialName (e.g. "createdAt" timestamptz).
@@ -86,6 +89,7 @@ Rules:
 
 def build_feature_prompt(
     app_name: str, description: str, schema_sql: Optional[str] = None,
+    db_schema: Optional[str] = None,
 ) -> str:
     base = f"""Build a complete Kotlin Multiplatform app called "{app_name}".
 
@@ -107,6 +111,12 @@ Write complete, working code. No TODOs or placeholders."""
 
     if schema_sql and config.SUPABASE_ANON_KEY:
         supabase_url = f"https://{config.SUPABASE_PROJECT_REF}.supabase.co"
+        schema_note = ""
+        if db_schema:
+            schema_note = (
+                f"\n- **Database schema:** `{db_schema}` (all tables live here, NOT in public)\n"
+                f"- When running SQL, always start with: `SET search_path TO {db_schema}, public;`\n"
+            )
         base += f"""
 
 ## Supabase Backend
@@ -115,7 +125,7 @@ The database has been provisioned. Connect to it using these details:
 
 - Supabase URL: {supabase_url}
 - Anon key: {config.SUPABASE_ANON_KEY}
-
+{schema_note}
 IMPORTANT: Use these EXACT values above in your code. Do NOT use placeholders
 like "YOUR_PROJECT" or "YOUR_ANON_KEY". The real credentials are provided above.
 
@@ -208,7 +218,19 @@ async def handle_buildapp(
         await on_status(f"❌ Could not find workspace `{slug}`.", None)
         return None
 
-    # 1.5 Data-modeling interview (only when Supabase is configured)
+    # 1.5a Create per-app Postgres schema for isolation
+    app_schema = None
+    if config.SUPABASE_PROJECT_REF and config.SUPABASE_MANAGEMENT_KEY:
+        app_schema = schema_name_for_workspace(slug)
+        await on_status(f"🗄️ Creating schema `{app_schema}` for isolation...", None)
+        ok, err = await ensure_schema(app_schema)
+        if ok:
+            registry.set_schema(slug, app_schema)
+        else:
+            await on_status(f"⚠️ Schema creation failed: {err[:200]}. Using public.", None)
+            app_schema = None
+
+    # 1.5b Data-modeling interview (only when Supabase is configured)
     data_description: Optional[str] = None
     if config.SUPABASE_PROJECT_REF and config.SUPABASE_MANAGEMENT_KEY and on_ask:
         question = (
@@ -231,8 +253,15 @@ async def handle_buildapp(
                 f"User's data requirements:\n{data_description}\n"
                 "Use these as the primary guide for table and column design."
             )
+        if app_schema:
+            schema_section = f"This app uses Postgres schema: {app_schema}. All tables must be created in this schema."
+            search_path_instruction = f"Start the SQL with: SET search_path TO {app_schema}, public;"
+        else:
+            schema_section = ""
+            search_path_instruction = "Tables go in the public schema (default)"
         schema_prompt = SCHEMA_PROMPT.format(
-            description=description, app_name=app_name, data_section=data_section
+            description=description, app_name=app_name, data_section=data_section,
+            schema_section=schema_section, search_path_instruction=search_path_instruction,
         )
         schema_result = await claude.run(schema_prompt, slug, ws_path)
         schema_sql = extract_sql(schema_result.stdout)
@@ -241,7 +270,7 @@ async def handle_buildapp(
             await on_status("🗄️ Creating Supabase tables...", None)
             from supabase_client import patch_idempotent
             schema_sql = patch_idempotent(schema_sql)
-            ok, err = await run_sql(schema_sql)
+            ok, err = await run_sql(schema_sql, schema=app_schema)
             if ok:
                 await on_status("✅ Database ready.", None)
             else:
@@ -253,7 +282,7 @@ async def handle_buildapp(
             await on_status("⚠️ Could not extract SQL from schema response. Continuing without backend.", None)
 
     # 3. Claude builds features + auto-fix for Android first
-    feature_prompt = build_feature_prompt(app_name, description, schema_sql=schema_sql)
+    feature_prompt = build_feature_prompt(app_name, description, schema_sql=schema_sql, db_schema=app_schema)
 
     async def loop_status(msg):
         await on_status(msg, None)

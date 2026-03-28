@@ -183,12 +183,13 @@ async def handle_prompt(
             )
     await ctx.send(channel, result.stdout or "(empty)")
 
-    # Auto-sync changed SQL files to Supabase
+    # Auto-sync changed SQL files to Supabase (with per-app schema isolation)
     if sql_before and config.SUPABASE_PROJECT_REF and config.SUPABASE_MANAGEMENT_KEY:
         changed_sql = detect_changed_sql(sql_before, ws_path)
         if changed_sql:
+            ws_schema = ctx.registry.get_schema(ws_key)
             await ctx.send(channel, "🗄️ Updating database...")
-            ok, sync_msg = await sync_sql_files(changed_sql)
+            ok, sync_msg = await sync_sql_files(changed_sql, schema=ws_schema)
             icon = "✅" if ok else "⚠️"
             await ctx.send(channel, f"{icon} {sync_msg}")
 
