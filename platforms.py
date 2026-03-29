@@ -873,6 +873,7 @@ class WebPlatform:
             "npx", "wrangler", "pages", "deploy", str(dist_dir),
             f"--project-name={project}",
             "--commit-dirty=true",
+            "--branch=main",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
