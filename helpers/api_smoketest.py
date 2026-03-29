@@ -120,6 +120,9 @@ async def run_api_smoketest(
                 "POST newsession", True, "skipped (no workspaces)",
             ))
 
+    # 11. CF Pages credentials valid (runs outside the base_url client)
+    result.checks.append(await _check_cf_credentials())
+
     result.success = all(c.passed for c in result.checks)
     return result
 
@@ -263,5 +266,23 @@ async def _check_newsession(
         if r.status_code != 200:
             return ApiCheckResult(name, False, f"status {r.status_code}")
         return ApiCheckResult(name, True)
+    except Exception as exc:
+        return ApiCheckResult(name, False, str(exc)[:200])
+
+
+async def _check_cf_credentials() -> ApiCheckResult:
+    name = "CF Pages credentials valid"
+    try:
+        import config as cfg
+        if not cfg.CLOUDFLARE_API_TOKEN or not cfg.CLOUDFLARE_ACCOUNT_ID:
+            return ApiCheckResult(name, False, "CLOUDFLARE_API_TOKEN or CLOUDFLARE_ACCOUNT_ID not set")
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(
+                "https://api.cloudflare.com/client/v4/user/tokens/verify",
+                headers={"Authorization": f"Bearer {cfg.CLOUDFLARE_API_TOKEN}"},
+            )
+            if r.status_code == 200 and r.json().get("success"):
+                return ApiCheckResult(name, True, "token valid")
+            return ApiCheckResult(name, False, f"token verification failed: {r.status_code}")
     except Exception as exc:
         return ApiCheckResult(name, False, str(exc)[:200])

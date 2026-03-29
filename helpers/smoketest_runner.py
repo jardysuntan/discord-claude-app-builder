@@ -262,7 +262,40 @@ async def _run_scenario(
     if screenshot_ok:
         await status(f"{prefix}: Screenshot captured", screenshot_path)
 
-    # ── Optional: iOS / Android demos (admin only, best-effort) ──────────
+    # ── Stage 5: CF Pages deploy verification ─────────────────────────
+    if url and "pages.dev" in url:
+        t0 = time.time()
+        deploy_ok = False
+        deploy_detail = ""
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as hc:
+                # CF Pages can take a few seconds to propagate — retry up to 3 times
+                for attempt in range(3):
+                    resp = await hc.head(url)
+                    if resp.status_code == 200:
+                        deploy_ok = True
+                        break
+                    await asyncio.sleep(3)
+                if not deploy_ok:
+                    deploy_detail = f"URL {url} returned {resp.status_code}"
+        except Exception as exc:
+            deploy_detail = str(exc)[:200]
+        dur = time.time() - t0
+        result.stages.append(StageResult(
+            f"{prefix}: CF Pages deploy", deploy_ok, dur,
+            deploy_detail if not deploy_ok else url,
+        ))
+        if deploy_ok:
+            await status(f"{prefix}: CF Pages live at {url}", None)
+    elif url:
+        # Deployed via tunnel/localhost fallback — CF Pages not available
+        result.stages.append(StageResult(
+            f"{prefix}: CF Pages deploy", False, 0,
+            f"Fell back to {url} — CF Pages deploy failed",
+        ))
+
+    # ── Optional: iOS / Android demos (admin only, best-effort) ─────��────
     if is_admin:
         # Android demo
         from platforms import AndroidPlatform
