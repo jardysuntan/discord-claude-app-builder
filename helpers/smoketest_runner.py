@@ -247,10 +247,10 @@ async def _run_scenario(
     url = await WebPlatform.serve(ws_path, workspace_key=slug)
     if url:
         import asyncio
+        # Prefer the deployed URL (e.g. CF Pages) — more reliable than localhost
+        screenshot_url = url if url.startswith("https://") else f"http://localhost:{config.WEB_SERVE_PORT}"
         await asyncio.sleep(2)
-        screenshot_path = await take_web_screenshot(
-            f"http://localhost:{config.WEB_SERVE_PORT}"
-        )
+        screenshot_path = await take_web_screenshot(screenshot_url)
     dur = time.time() - t0
 
     screenshot_ok = screenshot_path is not None
