@@ -222,12 +222,25 @@ async def rename_workspace(slug: str, req: RenameRequest):
 
 
 @app.delete("/api/v1/workspaces/{slug}", dependencies=[Depends(verify_token)])
-async def delete_workspace(slug: str):
-    """Delete a workspace (registry + files)."""
-    ok = await service.delete_workspace(slug)
+async def delete_workspace(slug: str, force: bool = False):
+    """Delete a workspace (registry + files). Protected workspaces require force=true."""
+    try:
+        ok = await service.delete_workspace(slug, force=force)
+    except ValueError as e:
+        raise HTTPException(403, str(e))
     if not ok:
         raise HTTPException(404, f"Workspace '{slug}' not found")
     return {"slug": slug, "deleted": True}
+
+
+@app.post("/api/v1/workspaces/{slug}/protect", dependencies=[Depends(verify_token)])
+async def protect_workspace(slug: str, protected: bool = True):
+    """Toggle protection on a workspace. Protected workspaces cannot be deleted without force=true."""
+    registry = service._get_registry()
+    if not registry.exists(slug):
+        raise HTTPException(404, f"Workspace '{slug}' not found")
+    registry.set_protected(slug, protected)
+    return {"slug": slug, "protected": protected}
 
 
 @app.post("/api/v1/workspaces/{slug}/newsession", dependencies=[Depends(verify_token)])
