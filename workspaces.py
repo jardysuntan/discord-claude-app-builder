@@ -180,8 +180,50 @@ class WorkspaceRegistry:
             entry["supabase_schema"] = schema_name
             self._save()
 
+    def get_category(self, key: str) -> Optional[str]:
+        """Return the category ('app', 'smoketest', 'experiment') or None."""
+        entry = self._workspaces.get(key.lower())
+        if not entry or not isinstance(entry, dict):
+            return None
+        return entry.get("category")
+
+    def set_category(self, key: str, category: str):
+        """Set workspace category. Must be 'app', 'smoketest', or 'experiment'."""
+        if category not in ("app", "smoketest", "experiment"):
+            raise ValueError(f"Invalid category: {category}")
+        entry = self._workspaces.get(key.lower())
+        if entry and isinstance(entry, dict):
+            entry["category"] = category
+            self._save()
+
+    def is_active(self, key: str) -> bool:
+        """Return whether the workspace is active. Defaults to True for backward compat."""
+        entry = self._workspaces.get(key.lower())
+        if not entry or not isinstance(entry, dict):
+            return True
+        return entry.get("active", True)
+
+    def set_active(self, key: str, active: bool):
+        """Set workspace active flag."""
+        entry = self._workspaces.get(key.lower())
+        if entry and isinstance(entry, dict):
+            entry["active"] = active
+            self._save()
+
     def exists(self, key: str) -> bool:
         return key.lower() in self._workspaces
+
+    def is_protected(self, key: str) -> bool:
+        """Check if a workspace is protected from deletion."""
+        ws = self._workspaces.get(key.lower(), {})
+        return bool(ws.get("protected", False))
+
+    def set_protected(self, key: str, protected: bool = True):
+        """Mark a workspace as protected (or unprotected)."""
+        k = key.lower()
+        if k in self._workspaces:
+            self._workspaces[k]["protected"] = protected
+            self._save()
 
     def add(self, key: str, path: str, owner_id: Optional[int] = None):
         self._workspaces[key.lower()] = {
@@ -190,8 +232,12 @@ class WorkspaceRegistry:
         }
         self._save()
 
-    def remove(self, key: str):
-        self._workspaces.pop(key.lower(), None)
+    def remove(self, key: str, force: bool = False):
+        """Remove a workspace. Raises ValueError if protected and force=False."""
+        k = key.lower()
+        if self.is_protected(k) and not force:
+            raise ValueError(f"Workspace '{key}' is protected. Use force=True to override.")
+        self._workspaces.pop(k, None)
         self._save()
 
     def rename(self, old_key: str, new_key: str) -> bool:

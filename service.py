@@ -366,13 +366,18 @@ async def rename_workspace(slug: str, new_name: str) -> bool:
     return registry.rename(slug, new_name)
 
 
-async def delete_workspace(slug: str) -> bool:
-    """Delete a workspace from registry and disk. Returns False if not found."""
+async def delete_workspace(slug: str, force: bool = False) -> bool:
+    """Delete a workspace from registry, disk, and Cloudflare Pages. Returns False if not found.
+    Raises ValueError if workspace is protected and force=False."""
     registry = _get_registry()
     ws_path = registry.get_path(slug)
     if not ws_path:
         return False
-    registry.remove(slug)
+    # Delete CF Pages project (best-effort)
+    from helpers.cf_pages import cf_project_name, delete_cf_project
+    cf_name = cf_project_name(slug)
+    await delete_cf_project(cf_name)
+    registry.remove(slug, force=force)  # raises ValueError if protected
     if os.path.isdir(ws_path):
         shutil.rmtree(ws_path, ignore_errors=True)
     return True

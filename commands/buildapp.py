@@ -16,7 +16,7 @@ from agent_loop import run_agent_loop, format_loop_summary
 from commands.create import create_kmp_project
 from platforms import AndroidPlatform, iOSPlatform, WebPlatform
 from supabase_client import run_sql, extract_sql
-from helpers.schema_manager import schema_name_for_workspace, ensure_schema, set_search_path_sql
+from helpers.schema_manager import schema_name_for_workspace, ensure_schema, set_search_path_sql, ensure_dashboard_function
 import glob
 import os
 
@@ -75,6 +75,7 @@ Rules:
 - Every table gets: id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
   "createdAt" timestamptz DEFAULT now().
 - Include an app_meta table with columns: id (int default 1, PK, CHECK id=1),
+  app_name text, description text,
   version text, "lastUpdated" timestamptz DEFAULT now(), "joinCode" text, "organizerCode" text.
 - Add a get_app_config() RPC that returns all rows from every table as a single
   JSON object via json_build_object + (SELECT json_agg(...) FROM <table>).
@@ -213,6 +214,7 @@ async def handle_buildapp(
 
     slug = scaffold_result.slug
     app_name = slug  # use actual name (may have been incremented)
+    registry.set_category(slug, "app")
     ws_path = registry.get_path(slug)
     if not ws_path:
         await on_status(f"❌ Could not find workspace `{slug}`.", None)
@@ -226,6 +228,7 @@ async def handle_buildapp(
         ok, err = await ensure_schema(app_schema)
         if ok:
             registry.set_schema(slug, app_schema)
+            await ensure_dashboard_function()
         else:
             await on_status(f"⚠️ Schema creation failed: {err[:200]}. Using public.", None)
             app_schema = None
@@ -273,6 +276,15 @@ async def handle_buildapp(
             ok, err = await run_sql(schema_sql, schema=app_schema)
             if ok:
                 await on_status("✅ Database ready.", None)
+                # Populate app_meta with name + description for dashboard discovery
+                if app_schema:
+                    safe_name = app_name.replace("'", "''")
+                    safe_desc = description[:500].replace("'", "''")
+                    await run_sql(
+                        f"INSERT INTO app_meta (id, app_name, description) VALUES (1, '{safe_name}', '{safe_desc}') "
+                        f"ON CONFLICT (id) DO UPDATE SET app_name = EXCLUDED.app_name, description = EXCLUDED.description;",
+                        schema=app_schema,
+                    )
             else:
                 await on_status(
                     f"⚠️ DB setup failed: {err[:200]}. Continuing without backend.", None

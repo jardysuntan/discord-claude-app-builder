@@ -67,6 +67,27 @@ async def check_cf_name_available(project_name: str) -> str:
     return "available"
 
 
+async def delete_cf_project(project_name: str) -> bool:
+    """Delete a Cloudflare Pages project. Returns True on success or if already gone (404)."""
+    if not config.CLOUDFLARE_API_TOKEN or not config.CLOUDFLARE_ACCOUNT_ID:
+        return False
+
+    headers = {
+        "Authorization": f"Bearer {config.CLOUDFLARE_API_TOKEN}",
+    }
+    acct = config.CLOUDFLARE_ACCOUNT_ID
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.delete(
+                f"https://api.cloudflare.com/client/v4/accounts/{acct}/pages/projects/{project_name}",
+                headers=headers,
+            )
+            return resp.status_code in (200, 404)
+    except Exception:
+        return False
+
+
 def generate_alternatives(base_name: str, count: int = 3) -> list[str]:
     """Return deterministic + random alternative names."""
     alts = []

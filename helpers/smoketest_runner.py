@@ -151,6 +151,7 @@ async def _run_scenario(
 
     result.stages.append(StageResult(f"{prefix}: Create workspace", True, dur))
     slug = scaffold.slug
+    registry.set_category(slug, "smoketest")
     result.workspace_slug = slug
     ws_path = registry.get_path(slug)
     result.workspace_path = ws_path or ""
@@ -384,6 +385,15 @@ def _schedule_cleanup(
 ) -> None:
     """Clean up workspace on pass; leave it for inspection on failure."""
     if passed:
+        # Fire-and-forget CF Pages deletion
+        import asyncio
+        from helpers.cf_pages import cf_project_name, delete_cf_project
+        try:
+            asyncio.get_event_loop().create_task(
+                delete_cf_project(cf_project_name(slug))
+            )
+        except Exception:
+            pass
         try:
             shutil.rmtree(ws_path)
         except Exception:

@@ -20,6 +20,7 @@ allowlist.json
 # Runtime state
 workspaces.json
 workspaces.json.bak
+APP_REGISTRY.md
 cost_tracker.json
 claude_sessions.json
 app_plans.json
