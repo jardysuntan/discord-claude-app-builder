@@ -2,7 +2,7 @@ module.exports = {
   apps: [{
     name: "discord-claude-bridge",
     script: "bot.py",
-    interpreter: "python3",
+    interpreter: "./venv/bin/python",
     cwd: __dirname,
     watch: ["*.py", "commands/*.py", "handlers/*.py", "views/*.py", "helpers/*.py"],
     watch_delay: 2000,
@@ -13,7 +13,7 @@ module.exports = {
   }, {
     name: "app-builder-api",
     script: "api.py",
-    interpreter: "/opt/homebrew/bin/python3.12",
+    interpreter: "./venv/bin/python",
     cwd: __dirname,
     watch: ["api.py", "service.py"],
     watch_delay: 2000,
