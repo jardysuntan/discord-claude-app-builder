@@ -1441,8 +1441,10 @@ async def build_platform(platform: str, workspace_path: str) -> BuildResult:
     return await cls.build(workspace_path)
 
 
-async def demo_platform(platform: str, workspace_path: str) -> DemoResult:
+async def demo_platform(platform: str, workspace_path: str, workspace_key: str = "") -> DemoResult:
     cls = PLATFORMS.get(platform)
     if not cls:
         return DemoResult(success=False, message=f"Unknown platform: {platform}")
+    if platform == "web":
+        return await cls.full_demo(workspace_path, workspace_key=workspace_key)
     return await cls.full_demo(workspace_path)
