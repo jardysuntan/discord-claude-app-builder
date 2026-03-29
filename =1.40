@@ -1,0 +1,17 @@
+Collecting playwright
+  Downloading playwright-1.58.0-py3-none-macosx_11_0_arm64.whl.metadata (3.5 kB)
+Collecting pyee<14,>=13 (from playwright)
+  Downloading pyee-13.0.1-py3-none-any.whl.metadata (3.0 kB)
+Collecting greenlet<4.0.0,>=3.1.1 (from playwright)
+  Downloading greenlet-3.3.2-cp312-cp312-macosx_11_0_universal2.whl.metadata (3.7 kB)
+Requirement already satisfied: typing-extensions in ./venv/lib/python3.12/site-packages (from pyee<14,>=13->playwright) (4.15.0)
+Downloading playwright-1.58.0-py3-none-macosx_11_0_arm64.whl (41.0 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 41.0/41.0 MB 58.7 MB/s  0:00:00
+Downloading greenlet-3.3.2-cp312-cp312-macosx_11_0_universal2.whl (280 kB)
+Downloading pyee-13.0.1-py3-none-any.whl (15 kB)
+Installing collected packages: pyee, greenlet, playwright
+
+Successfully installed greenlet-3.3.2 playwright-1.58.0 pyee-13.0.1
+
+[notice] A new release of pip is available: 26.0 -> 26.0.1
+[notice] To update, run: /Users/jaredtanpersonal/bots/discord-claude-bridge/venv/bin/python3.12 -m pip install --upgrade pip
