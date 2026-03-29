@@ -44,10 +44,28 @@ def _unique_name(app_name: str, base_dir: Path) -> str:
     return f"{app_name}{int(time.time())}"
 
 
-def _project_base_dir(owner_id: int | None) -> Path:
+def _project_base_dir(owner_id: int | None, account_id: str | None = None) -> Path:
     """Return the base directory for a user's projects.
-    Admin (or None) → BASE_PROJECTS_DIR, others → BASE_PROJECTS_DIR/users/<id>/"""
+    Admin (or None) → BASE_PROJECTS_DIR.
+    Account-based users → BASE_PROJECTS_DIR/accounts/<account_id>/.
+    Discord-only users → BASE_PROJECTS_DIR/users/<id>/."""
     base = Path(config.BASE_PROJECTS_DIR)
+
+    # Check account-based routing first
+    if account_id:
+        # Check if this is an admin account
+        try:
+            from accounts import AccountManager
+            mgr = AccountManager()
+            acct = mgr.get(account_id)
+            if acct and acct.role == "admin":
+                return base
+        except Exception:
+            pass
+        acct_dir = base / "accounts" / account_id
+        acct_dir.mkdir(parents=True, exist_ok=True)
+        return acct_dir
+
     if owner_id is None or owner_id == config.DISCORD_ALLOWED_USER_ID:
         return base
     user_dir = base / "users" / str(owner_id)
@@ -55,9 +73,10 @@ def _project_base_dir(owner_id: int | None) -> Path:
     return user_dir
 
 
-async def create_kmp_project(app_name: str, registry: WorkspaceRegistry, owner_id: int | None = None) -> CreateResult:
+async def create_kmp_project(app_name: str, registry: WorkspaceRegistry, owner_id: int | None = None,
+                            account_id: str | None = None) -> CreateResult:
     """Scaffold a new KMP Compose Multiplatform project."""
-    base_dir = _project_base_dir(owner_id)
+    base_dir = _project_base_dir(owner_id, account_id=account_id)
     app_name = _unique_name(app_name, base_dir)
     slug = slugify(app_name)
     new_pkg = f"{config.KMP_PACKAGE_PREFIX}.{slug}"
@@ -165,7 +184,7 @@ async def create_kmp_project(app_name: str, registry: WorkspaceRegistry, owner_i
     )
 
     # Register workspace
-    registry.add(slug, str(project_dir), owner_id=owner_id)
+    registry.add(slug, str(project_dir), owner_id=owner_id, account_id=account_id)
 
     return CreateResult(
         message=(

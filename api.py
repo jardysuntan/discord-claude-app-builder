@@ -18,12 +18,13 @@ from pydantic import BaseModel
 import uvicorn
 
 import service
+from accounts import AccountManager, Account
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logger = logging.getLogger("api")
 
-# ── Auth ─────────────────────────────────────────────────────────────────────
+# ── Legacy Auth (kept for backward compat) ──────────────────────────────────
 
 TOKEN_FILE = Path(__file__).parent / ".api-token"
 
@@ -42,11 +43,50 @@ def _get_api_token() -> str:
 
 API_TOKEN = _get_api_token()
 
-async def verify_token(authorization: str = Header(...)):
+# ── Account Manager (singleton) ─────────────────────────────────────────────
+
+_account_mgr: AccountManager | None = None
+
+def _get_account_mgr() -> AccountManager:
+    global _account_mgr
+    if _account_mgr is None:
+        _account_mgr = AccountManager()
+    return _account_mgr
+
+
+# ── Multi-tenant Auth ───────────────────────────────────────────────────────
+
+async def get_current_account(authorization: str = Header(...)) -> Account:
+    """Authenticate via Bearer token. Supports legacy .api-token and new API keys."""
     if not authorization.startswith("Bearer "):
         raise HTTPException(401, "Missing Bearer token")
-    if authorization[7:] != API_TOKEN:
-        raise HTTPException(403, "Invalid token")
+    token = authorization[7:]
+
+    # 1. Check legacy .api-token (maps to admin account)
+    if token == API_TOKEN:
+        mgr = _get_account_mgr()
+        # Find admin account (or any account with this legacy key)
+        acct = mgr.authenticate(token)
+        if acct:
+            return acct
+        # Fallback: find first admin account
+        for a in mgr.list_accounts():
+            if a.role == "admin":
+                return a
+        # No accounts at all — create a synthetic admin for backward compat
+        return Account(
+            account_id="legacy_admin",
+            display_name="Admin (legacy)",
+            role="admin",
+        )
+
+    # 2. Check new API keys
+    mgr = _get_account_mgr()
+    acct = mgr.authenticate(token)
+    if acct:
+        return acct
+
+    raise HTTPException(403, "Invalid token")
 
 
 # ── App ──────────────────────────────────────────────────────────────────────
@@ -96,12 +136,16 @@ class BuildStatusResponse(BaseModel):
     platforms: dict = {}
     elapsed_seconds: int = 0
     logs: list[str] = []
+    warnings: list[str] = []
+    capabilities: dict | None = None
 
 class WorkspaceResponse(BaseModel):
     slug: str
     path: str
     platform: str
     owner_id: int | None = None
+    account_id: str | None = None
+    capabilities: dict | None = None
 
 class RenameRequest(BaseModel):
     new_name: str
@@ -130,11 +174,195 @@ class SaveListResponse(BaseModel):
     saves: list[dict] = []
     message: str
 
+class RegisterRequest(BaseModel):
+    display_name: str
+    email: str | None = None
 
-# ── Endpoints ────────────────────────────────────────────────────────────────
+class CredentialRequest(BaseModel):
+    """Generic credential payload — contents depend on type."""
+    data: dict
 
-@app.post("/api/v1/buildapp", response_model=BuildStatusResponse, dependencies=[Depends(verify_token)])
-async def buildapp(req: BuildAppRequest):
+class CreateKeyRequest(BaseModel):
+    label: str = "default"
+
+class WhitelistRequest(BaseModel):
+    account_id: str
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+def _require_admin(account: Account):
+    if account.role != "admin":
+        raise HTTPException(403, "Admin access required")
+
+
+def _check_workspace_access(account: Account, slug: str):
+    """Ensure the account can access this workspace."""
+    if account.role == "admin":
+        return
+    registry = service._get_registry()
+    if not registry.can_access(slug, user_id=0, is_admin=False, account_id=account.account_id):
+        raise HTTPException(403, f"No access to workspace '{slug}'")
+
+
+def _status_to_response(s: service.BuildStatus) -> BuildStatusResponse:
+    return BuildStatusResponse(
+        build_id=s.build_id,
+        slug=s.slug,
+        status=s.status,
+        phase=s.phase,
+        message=s.message,
+        platforms=s.platforms,
+        elapsed_seconds=s.elapsed_seconds,
+        logs=s.logs,
+        warnings=getattr(s, 'warnings', []),
+        capabilities=getattr(s, 'capabilities', None),
+    )
+
+
+# ── Registration (no auth required) ─────────────────────────────────────────
+
+@app.post("/api/v1/register")
+async def register(req: RegisterRequest):
+    """Register a new account. Returns account_id and API key (shown once)."""
+    mgr = _get_account_mgr()
+    acct, raw_key = mgr.register(req.display_name, email=req.email)
+    return {
+        "account_id": acct.account_id,
+        "display_name": acct.display_name,
+        "api_key": raw_key,
+        "message": "Save your API key — it cannot be retrieved later.",
+    }
+
+
+# ── Account endpoints (authenticated) ───────────────────────────────────────
+
+@app.get("/api/v1/account")
+async def get_account(account: Account = Depends(get_current_account)):
+    """Get current account info, capabilities, and setup checklist."""
+    mgr = _get_account_mgr()
+    return {
+        "account_id": account.account_id,
+        "display_name": account.display_name,
+        "email": account.email,
+        "role": account.role,
+        "discord_user_id": account.discord_user_id,
+        "shared_store_access": account.shared_store_access,
+        "capabilities": mgr.get_capabilities(account.account_id),
+        "setup_checklist": mgr.get_setup_checklist(account.account_id),
+        "created_at": account.created_at,
+    }
+
+
+@app.post("/api/v1/account/credentials/{cred_type}")
+async def set_credential(cred_type: str, req: CredentialRequest,
+                         account: Account = Depends(get_current_account)):
+    """Set a credential (llm, supabase, apple, google)."""
+    mgr = _get_account_mgr()
+    ok = mgr.set_credential(account.account_id, cred_type, req.data)
+    if not ok:
+        raise HTTPException(400, f"Invalid credential type: {cred_type}")
+    return {
+        "credential_type": cred_type,
+        "status": "stored",
+        "capabilities": mgr.get_capabilities(account.account_id),
+    }
+
+
+@app.get("/api/v1/account/credentials")
+async def list_credentials(account: Account = Depends(get_current_account)):
+    """List which credential types are configured (no secrets exposed)."""
+    mgr = _get_account_mgr()
+    return mgr.list_credentials(account.account_id)
+
+
+@app.delete("/api/v1/account/credentials/{cred_type}")
+async def delete_credential(cred_type: str, account: Account = Depends(get_current_account)):
+    """Remove a credential."""
+    mgr = _get_account_mgr()
+    ok = mgr.delete_credential(account.account_id, cred_type)
+    if not ok:
+        raise HTTPException(404, f"Credential '{cred_type}' not found")
+    return {
+        "credential_type": cred_type,
+        "status": "deleted",
+        "capabilities": mgr.get_capabilities(account.account_id),
+    }
+
+
+@app.post("/api/v1/account/keys")
+async def create_api_key(req: CreateKeyRequest = CreateKeyRequest(),
+                         account: Account = Depends(get_current_account)):
+    """Create a new API key for this account."""
+    mgr = _get_account_mgr()
+    raw_key = mgr.create_api_key(account.account_id, req.label)
+    if not raw_key:
+        raise HTTPException(500, "Failed to create API key")
+    return {
+        "api_key": raw_key,
+        "label": req.label,
+        "message": "Save your API key — it cannot be retrieved later.",
+    }
+
+
+@app.get("/api/v1/account/keys")
+async def list_api_keys(account: Account = Depends(get_current_account)):
+    """List API keys (prefix + label only, never the full key)."""
+    mgr = _get_account_mgr()
+    return mgr.list_api_keys(account.account_id)
+
+
+@app.delete("/api/v1/account/keys/{prefix}")
+async def revoke_api_key(prefix: str, account: Account = Depends(get_current_account)):
+    """Revoke an API key by its prefix."""
+    mgr = _get_account_mgr()
+    ok = mgr.revoke_api_key(account.account_id, prefix)
+    if not ok:
+        raise HTTPException(404, f"API key with prefix '{prefix}' not found")
+    return {"prefix": prefix, "status": "revoked"}
+
+
+# ── Admin endpoints ─────────────────────────────────────────────────────────
+
+@app.post("/api/v1/admin/whitelist")
+async def grant_shared_store(req: WhitelistRequest,
+                             account: Account = Depends(get_current_account)):
+    """Grant shared store access to an account (admin only)."""
+    _require_admin(account)
+    mgr = _get_account_mgr()
+    ok = mgr.set_shared_store_access(req.account_id, True)
+    if not ok:
+        raise HTTPException(404, f"Account '{req.account_id}' not found")
+    return {"account_id": req.account_id, "shared_store_access": True}
+
+
+@app.delete("/api/v1/admin/whitelist/{account_id}")
+async def revoke_shared_store(account_id: str,
+                              account: Account = Depends(get_current_account)):
+    """Revoke shared store access (admin only)."""
+    _require_admin(account)
+    mgr = _get_account_mgr()
+    ok = mgr.set_shared_store_access(account_id, False)
+    if not ok:
+        raise HTTPException(404, f"Account '{account_id}' not found")
+    return {"account_id": account_id, "shared_store_access": False}
+
+
+@app.get("/api/v1/admin/whitelist")
+async def list_whitelist(account: Account = Depends(get_current_account)):
+    """List accounts with shared store access (admin only)."""
+    _require_admin(account)
+    mgr = _get_account_mgr()
+    return [
+        {"account_id": a.account_id, "display_name": a.display_name}
+        for a in mgr.list_accounts() if a.shared_store_access
+    ]
+
+
+# ── Existing endpoints (updated for multi-tenant auth) ──────────────────────
+
+@app.post("/api/v1/buildapp", response_model=BuildStatusResponse)
+async def buildapp(req: BuildAppRequest, account: Account = Depends(get_current_account)):
     """Start a new app build. Returns immediately with a build_id for polling."""
     build_req = service.BuildRequest(
         description=req.description,
@@ -142,13 +370,14 @@ async def buildapp(req: BuildAppRequest):
         platform=req.platform,
         skip_supabase=req.skip_supabase,
         webhook_url=req.webhook_url,
+        account_id=account.account_id,
     )
     status = await service.build_app(build_req)
     return _status_to_response(status)
 
 
-@app.get("/api/v1/builds/{build_id}", response_model=BuildStatusResponse, dependencies=[Depends(verify_token)])
-async def get_build(build_id: str):
+@app.get("/api/v1/builds/{build_id}", response_model=BuildStatusResponse)
+async def get_build(build_id: str, account: Account = Depends(get_current_account)):
     """Poll build status."""
     status = service.get_build(build_id)
     if not status:
@@ -156,23 +385,40 @@ async def get_build(build_id: str):
     return _status_to_response(status)
 
 
-@app.get("/api/v1/workspaces", response_model=list[WorkspaceResponse], dependencies=[Depends(verify_token)])
-async def list_workspaces():
-    workspaces = await service.list_workspaces()
-    return [WorkspaceResponse(slug=w.slug, path=w.path, platform=w.platform, owner_id=w.owner_id) for w in workspaces]
+@app.get("/api/v1/workspaces", response_model=list[WorkspaceResponse])
+async def list_workspaces(account: Account = Depends(get_current_account)):
+    workspaces = await service.list_workspaces(account_id=account.account_id)
+    mgr = _get_account_mgr()
+    caps = mgr.get_capabilities(account.account_id)
+    return [
+        WorkspaceResponse(
+            slug=w.slug, path=w.path, platform=w.platform,
+            owner_id=w.owner_id, account_id=w.account_id,
+            capabilities=caps,
+        )
+        for w in workspaces
+    ]
 
 
-@app.get("/api/v1/workspaces/{slug}", response_model=WorkspaceResponse, dependencies=[Depends(verify_token)])
-async def get_workspace(slug: str):
+@app.get("/api/v1/workspaces/{slug}", response_model=WorkspaceResponse)
+async def get_workspace(slug: str, account: Account = Depends(get_current_account)):
+    _check_workspace_access(account, slug)
     ws = await service.get_workspace(slug)
     if not ws:
         raise HTTPException(404, f"Workspace '{slug}' not found")
-    return WorkspaceResponse(slug=ws.slug, path=ws.path, platform=ws.platform, owner_id=ws.owner_id)
+    mgr = _get_account_mgr()
+    return WorkspaceResponse(
+        slug=ws.slug, path=ws.path, platform=ws.platform,
+        owner_id=ws.owner_id, account_id=ws.account_id,
+        capabilities=mgr.get_capabilities(account.account_id),
+    )
 
 
-@app.post("/api/v1/workspaces/{slug}/prompt", response_model=BuildStatusResponse, dependencies=[Depends(verify_token)])
-async def send_prompt(slug: str, req: PromptRequestModel):
+@app.post("/api/v1/workspaces/{slug}/prompt", response_model=BuildStatusResponse)
+async def send_prompt(slug: str, req: PromptRequestModel,
+                      account: Account = Depends(get_current_account)):
     """Send a prompt to a workspace. Returns build_id for polling."""
+    _check_workspace_access(account, slug)
     try:
         status = await service.send_prompt(service.PromptRequest(workspace=slug, prompt=req.prompt))
         status.webhook_url = req.webhook_url
@@ -181,9 +427,11 @@ async def send_prompt(slug: str, req: PromptRequestModel):
         raise HTTPException(404, str(e))
 
 
-@app.post("/api/v1/workspaces/{slug}/demo", response_model=BuildStatusResponse, dependencies=[Depends(verify_token)])
-async def demo(slug: str, req: DemoRequest = DemoRequest()):
+@app.post("/api/v1/workspaces/{slug}/demo", response_model=BuildStatusResponse)
+async def demo(slug: str, req: DemoRequest = DemoRequest(),
+               account: Account = Depends(get_current_account)):
     """Trigger a demo build for a workspace."""
+    _check_workspace_access(account, slug)
     try:
         status = await service.demo_workspace(slug, req.platform)
         status.webhook_url = req.webhook_url
@@ -192,9 +440,11 @@ async def demo(slug: str, req: DemoRequest = DemoRequest()):
         raise HTTPException(404, str(e))
 
 
-@app.post("/api/v1/workspaces/{slug}/save", dependencies=[Depends(verify_token)])
-async def save(slug: str, req: SaveRequest = SaveRequest()):
+@app.post("/api/v1/workspaces/{slug}/save")
+async def save(slug: str, req: SaveRequest = SaveRequest(),
+               account: Account = Depends(get_current_account)):
     """Save/checkpoint a workspace."""
+    _check_workspace_access(account, slug)
     try:
         return await service.save_workspace(slug, req.message)
     except ValueError as e:
@@ -203,27 +453,32 @@ async def save(slug: str, req: SaveRequest = SaveRequest()):
 
 # ── Workspace Management ────────────────────────────────────────────────────
 
-@app.post("/api/v1/workspaces/{slug}/use", dependencies=[Depends(verify_token)])
-async def set_active_workspace(slug: str, user_id: int = 0):
+@app.post("/api/v1/workspaces/{slug}/use")
+async def set_active_workspace(slug: str, account: Account = Depends(get_current_account)):
     """Set workspace as the active default."""
-    ok = await service.set_default_workspace(user_id, slug)
+    _check_workspace_access(account, slug)
+    ok = await service.set_default_workspace(account.account_id, slug)
     if not ok:
         raise HTTPException(404, f"Workspace '{slug}' not found")
     return {"slug": slug, "active": True}
 
 
-@app.patch("/api/v1/workspaces/{slug}", dependencies=[Depends(verify_token)])
-async def rename_workspace(slug: str, req: RenameRequest):
+@app.patch("/api/v1/workspaces/{slug}")
+async def rename_workspace(slug: str, req: RenameRequest,
+                           account: Account = Depends(get_current_account)):
     """Rename a workspace."""
+    _check_workspace_access(account, slug)
     ok = await service.rename_workspace(slug, req.new_name)
     if not ok:
         raise HTTPException(400, f"Rename failed — '{slug}' not found or '{req.new_name}' already exists")
     return {"old_slug": slug, "new_slug": req.new_name}
 
 
-@app.delete("/api/v1/workspaces/{slug}", dependencies=[Depends(verify_token)])
-async def delete_workspace(slug: str, force: bool = False):
+@app.delete("/api/v1/workspaces/{slug}")
+async def delete_workspace(slug: str, force: bool = False,
+                           account: Account = Depends(get_current_account)):
     """Delete a workspace (registry + files). Protected workspaces require force=true."""
+    _check_workspace_access(account, slug)
     try:
         ok = await service.delete_workspace(slug, force=force)
     except ValueError as e:
@@ -233,9 +488,11 @@ async def delete_workspace(slug: str, force: bool = False):
     return {"slug": slug, "deleted": True}
 
 
-@app.post("/api/v1/workspaces/{slug}/protect", dependencies=[Depends(verify_token)])
-async def protect_workspace(slug: str, protected: bool = True):
-    """Toggle protection on a workspace. Protected workspaces cannot be deleted without force=true."""
+@app.post("/api/v1/workspaces/{slug}/protect")
+async def protect_workspace(slug: str, protected: bool = True,
+                            account: Account = Depends(get_current_account)):
+    """Toggle protection on a workspace."""
+    _check_workspace_access(account, slug)
     registry = service._get_registry()
     if not registry.exists(slug):
         raise HTTPException(404, f"Workspace '{slug}' not found")
@@ -243,9 +500,10 @@ async def protect_workspace(slug: str, protected: bool = True):
     return {"slug": slug, "protected": protected}
 
 
-@app.post("/api/v1/workspaces/{slug}/newsession", dependencies=[Depends(verify_token)])
-async def new_session(slug: str):
+@app.post("/api/v1/workspaces/{slug}/newsession")
+async def new_session(slug: str, account: Account = Depends(get_current_account)):
     """Clear Claude session for a workspace (start fresh conversation)."""
+    _check_workspace_access(account, slug)
     ws = await service.get_workspace(slug)
     if not ws:
         raise HTTPException(404, f"Workspace '{slug}' not found")
@@ -255,9 +513,11 @@ async def new_session(slug: str):
 
 # ── Build & Plan ────────────────────────────────────────────────────────────
 
-@app.post("/api/v1/workspaces/{slug}/build", response_model=BuildStatusResponse, dependencies=[Depends(verify_token)])
-async def build_workspace(slug: str, req: PlatformBuildRequest = PlatformBuildRequest()):
+@app.post("/api/v1/workspaces/{slug}/build", response_model=BuildStatusResponse)
+async def build_workspace(slug: str, req: PlatformBuildRequest = PlatformBuildRequest(),
+                          account: Account = Depends(get_current_account)):
     """Build workspace for a specific platform. Returns build_id for polling."""
+    _check_workspace_access(account, slug)
     try:
         status = await service.build_workspace_platform(slug, req.platform)
         status.webhook_url = req.webhook_url
@@ -266,8 +526,8 @@ async def build_workspace(slug: str, req: PlatformBuildRequest = PlatformBuildRe
         raise HTTPException(404, str(e))
 
 
-@app.post("/api/v1/planapp", dependencies=[Depends(verify_token)])
-async def plan_app(req: PlanAppRequest):
+@app.post("/api/v1/planapp")
+async def plan_app(req: PlanAppRequest, account: Account = Depends(get_current_account)):
     """Generate an app plan from a description. Synchronous — returns plan JSON."""
     plan = await service.plan_app(req.description)
     if not plan:
@@ -275,9 +535,10 @@ async def plan_app(req: PlanAppRequest):
     return plan
 
 
-@app.post("/api/v1/workspaces/{slug}/appraise", response_model=BuildStatusResponse, dependencies=[Depends(verify_token)])
-async def appraise_workspace(slug: str):
+@app.post("/api/v1/workspaces/{slug}/appraise", response_model=BuildStatusResponse)
+async def appraise_workspace(slug: str, account: Account = Depends(get_current_account)):
     """Run quality appraisal on a workspace. Returns build_id for polling."""
+    _check_workspace_access(account, slug)
     try:
         status = await service.appraise_workspace(slug)
         return _status_to_response(status)
@@ -287,9 +548,9 @@ async def appraise_workspace(slug: str):
 
 # ── Git Operations ──────────────────────────────────────────────────────────
 
-@app.get("/api/v1/workspaces/{slug}/git/status", response_model=GitResponse, dependencies=[Depends(verify_token)])
-async def git_status(slug: str):
-    """Get git status for a workspace."""
+@app.get("/api/v1/workspaces/{slug}/git/status", response_model=GitResponse)
+async def git_status(slug: str, account: Account = Depends(get_current_account)):
+    _check_workspace_access(account, slug)
     try:
         output = await service.git_status(slug)
         return GitResponse(output=output)
@@ -297,9 +558,10 @@ async def git_status(slug: str):
         raise HTTPException(404, str(e))
 
 
-@app.get("/api/v1/workspaces/{slug}/git/diff", response_model=GitResponse, dependencies=[Depends(verify_token)])
-async def git_diff(slug: str, full: bool = False):
-    """Get git diff. Use ?full=true for full patch."""
+@app.get("/api/v1/workspaces/{slug}/git/diff", response_model=GitResponse)
+async def git_diff(slug: str, full: bool = False,
+                   account: Account = Depends(get_current_account)):
+    _check_workspace_access(account, slug)
     try:
         output = await service.git_diff(slug, full=full)
         return GitResponse(output=output)
@@ -307,9 +569,10 @@ async def git_diff(slug: str, full: bool = False):
         raise HTTPException(404, str(e))
 
 
-@app.get("/api/v1/workspaces/{slug}/git/log", response_model=GitResponse, dependencies=[Depends(verify_token)])
-async def git_log(slug: str, count: int = 10):
-    """Get git log. Use ?count=N to control number of entries."""
+@app.get("/api/v1/workspaces/{slug}/git/log", response_model=GitResponse)
+async def git_log(slug: str, count: int = 10,
+                  account: Account = Depends(get_current_account)):
+    _check_workspace_access(account, slug)
     try:
         output = await service.git_log(slug, count=count)
         return GitResponse(output=output)
@@ -317,9 +580,10 @@ async def git_log(slug: str, count: int = 10):
         raise HTTPException(404, str(e))
 
 
-@app.post("/api/v1/workspaces/{slug}/git/commit", response_model=GitResponse, dependencies=[Depends(verify_token)])
-async def git_commit(slug: str, req: CommitRequest = CommitRequest()):
-    """Commit all changes. Omit message for auto-generated commit message."""
+@app.post("/api/v1/workspaces/{slug}/git/commit", response_model=GitResponse)
+async def git_commit(slug: str, req: CommitRequest = CommitRequest(),
+                     account: Account = Depends(get_current_account)):
+    _check_workspace_access(account, slug)
     try:
         output = await service.git_commit(slug, message=req.message, auto_push=req.auto_push)
         return GitResponse(output=output)
@@ -327,9 +591,9 @@ async def git_commit(slug: str, req: CommitRequest = CommitRequest()):
         raise HTTPException(404, str(e))
 
 
-@app.post("/api/v1/workspaces/{slug}/git/undo", response_model=GitResponse, dependencies=[Depends(verify_token)])
-async def git_undo(slug: str):
-    """Revert the last commit."""
+@app.post("/api/v1/workspaces/{slug}/git/undo", response_model=GitResponse)
+async def git_undo(slug: str, account: Account = Depends(get_current_account)):
+    _check_workspace_access(account, slug)
     try:
         output = await service.git_undo(slug)
         return GitResponse(output=output)
@@ -337,9 +601,10 @@ async def git_undo(slug: str):
         raise HTTPException(404, str(e))
 
 
-@app.post("/api/v1/workspaces/{slug}/git/branch", response_model=GitResponse, dependencies=[Depends(verify_token)])
-async def git_branch(slug: str, req: BranchRequest = BranchRequest()):
-    """List branches (no body) or create/switch branch (name in body)."""
+@app.post("/api/v1/workspaces/{slug}/git/branch", response_model=GitResponse)
+async def git_branch(slug: str, req: BranchRequest = BranchRequest(),
+                     account: Account = Depends(get_current_account)):
+    _check_workspace_access(account, slug)
     try:
         output = await service.git_branch(slug, name=req.name)
         return GitResponse(output=output)
@@ -347,9 +612,10 @@ async def git_branch(slug: str, req: BranchRequest = BranchRequest()):
         raise HTTPException(404, str(e))
 
 
-@app.post("/api/v1/workspaces/{slug}/git/stash", response_model=GitResponse, dependencies=[Depends(verify_token)])
-async def git_stash(slug: str, req: StashRequest = StashRequest()):
-    """Stash changes (default) or pop stash (pop=true)."""
+@app.post("/api/v1/workspaces/{slug}/git/stash", response_model=GitResponse)
+async def git_stash(slug: str, req: StashRequest = StashRequest(),
+                    account: Account = Depends(get_current_account)):
+    _check_workspace_access(account, slug)
     try:
         output = await service.git_stash(slug, pop=req.pop)
         return GitResponse(output=output)
@@ -359,9 +625,9 @@ async def git_stash(slug: str, req: StashRequest = StashRequest()):
 
 # ── Save System ─────────────────────────────────────────────────────────────
 
-@app.get("/api/v1/workspaces/{slug}/saves", response_model=SaveListResponse, dependencies=[Depends(verify_token)])
-async def list_saves(slug: str):
-    """List save history for a workspace."""
+@app.get("/api/v1/workspaces/{slug}/saves", response_model=SaveListResponse)
+async def list_saves(slug: str, account: Account = Depends(get_current_account)):
+    _check_workspace_access(account, slug)
     try:
         message, saves = await service.save_list(slug)
         return SaveListResponse(saves=saves, message=message)
@@ -369,9 +635,9 @@ async def list_saves(slug: str):
         raise HTTPException(404, str(e))
 
 
-@app.post("/api/v1/workspaces/{slug}/saves/undo", response_model=GitResponse, dependencies=[Depends(verify_token)])
-async def undo_save(slug: str):
-    """Undo the last save."""
+@app.post("/api/v1/workspaces/{slug}/saves/undo", response_model=GitResponse)
+async def undo_save(slug: str, account: Account = Depends(get_current_account)):
+    _check_workspace_access(account, slug)
     try:
         output = await service.save_undo(slug)
         return GitResponse(output=output)
@@ -385,9 +651,11 @@ class SmokeTestRequest(BaseModel):
     scenario: str | None = None  # "counter", "map", "video", or None for all
     api_tests: bool = False       # Also run API endpoint checks
 
-@app.post("/api/v1/smoketest", dependencies=[Depends(verify_token)])
-async def run_smoketest_endpoint(req: SmokeTestRequest = SmokeTestRequest()):
+@app.post("/api/v1/smoketest")
+async def run_smoketest_endpoint(req: SmokeTestRequest = SmokeTestRequest(),
+                                 account: Account = Depends(get_current_account)):
     """Kick off smoke tests. Returns a build_id for polling status."""
+    _require_admin(account)
     import uuid
     import time as _time
 
@@ -451,9 +719,9 @@ async def run_smoketest_endpoint(req: SmokeTestRequest = SmokeTestRequest()):
     asyncio.create_task(_run())
     return status
 
-@app.get("/api/v1/smoketest/{build_id}", dependencies=[Depends(verify_token)])
-async def get_smoketest_status(build_id: str):
-    """Poll smoke test status."""
+@app.get("/api/v1/smoketest/{build_id}")
+async def get_smoketest_status(build_id: str,
+                               account: Account = Depends(get_current_account)):
     if build_id not in _smoketest_results:
         raise HTTPException(404, f"Smoke test '{build_id}' not found")
     return _smoketest_results[build_id]
@@ -463,8 +731,8 @@ _smoketest_results: dict[str, BuildStatusResponse] = {}
 
 # ── Analytics ────────────────────────────────────────────────────────────────
 
-@app.get("/api/v1/analytics", dependencies=[Depends(verify_token)])
-async def analytics():
+@app.get("/api/v1/analytics")
+async def analytics(account: Account = Depends(get_current_account)):
     """Build analytics: success rates, avg durations, per-workspace and per-operation breakdowns."""
     return service.get_analytics()
 
@@ -474,21 +742,6 @@ async def analytics():
 @app.get("/api/v1/health")
 async def health():
     return {"status": "ok"}
-
-
-# ── Helpers ──────────────────────────────────────────────────────────────────
-
-def _status_to_response(s: service.BuildStatus) -> BuildStatusResponse:
-    return BuildStatusResponse(
-        build_id=s.build_id,
-        slug=s.slug,
-        status=s.status,
-        phase=s.phase,
-        message=s.message,
-        platforms=s.platforms,
-        elapsed_seconds=s.elapsed_seconds,
-        logs=s.logs,
-    )
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────

@@ -1,18 +1,239 @@
 # App Builder HTTP API v1
 
-HTTP API for triggering builds programmatically. Runs on port **8100** (configurable via `API_PORT`).
+HTTP API for building apps programmatically. Runs on port **8100** (configurable via `API_PORT`).
+
+## Quick Start (New Consumers)
+
+Three steps to go from zero to building apps:
+
+```bash
+# 1. Register — no auth required
+curl -X POST https://your-server:8100/api/v1/register \
+  -H "Content-Type: application/json" \
+  -d '{"display_name": "My Bot", "email": "dev@example.com"}'
+
+# Response: {"account_id": "acc_abc123", "api_key": "sk_live_xyz...", "message": "Save your API key..."}
+# SAVE THE API KEY — it's shown once and cannot be retrieved.
+
+# 2. Add your LLM key (required to build apps)
+curl -X POST https://your-server:8100/api/v1/account/credentials/llm \
+  -H "Authorization: Bearer sk_live_xyz..." \
+  -H "Content-Type: application/json" \
+  -d '{"data": {"api_key": "sk-your-openai-or-anthropic-key"}}'
+
+# 3. Build an app
+curl -X POST https://your-server:8100/api/v1/buildapp \
+  -H "Authorization: Bearer sk_live_xyz..." \
+  -H "Content-Type: application/json" \
+  -d '{"description": "a todo list app with categories"}'
+```
+
+Check what you can do: `GET /api/v1/account` returns your capabilities and a setup checklist.
 
 ## Auth
 
-All endpoints (except `/health`) require a Bearer token in the `Authorization` header.
-
-Token is read from `API_TOKEN` env var. If not set, a random token is generated and written to `.api-token`.
+All endpoints (except `/health` and `/register`) require a Bearer token:
 
 ```
-Authorization: Bearer <token>
+Authorization: Bearer <your-api-key>
 ```
 
-## Endpoints
+**Two types of tokens work:**
+- **New API keys** (`sk_live_...`) — created via `/register` or `/account/keys`. Each account can have multiple keys.
+- **Legacy token** (`.api-token` file) — maps to the admin account for backward compatibility.
+
+## Account Management
+
+### POST /api/v1/register
+
+Register a new account. **No auth required.** Returns an API key (shown once).
+
+```bash
+curl -X POST http://localhost:8100/api/v1/register \
+  -H "Content-Type: application/json" \
+  -d '{"display_name": "My Service", "email": "dev@example.com"}'
+```
+
+**Response:**
+```json
+{
+  "account_id": "acc_a1b2c3d4e5f6",
+  "display_name": "My Service",
+  "api_key": "sk_live_abc123...",
+  "message": "Save your API key — it cannot be retrieved later."
+}
+```
+
+### GET /api/v1/account
+
+Get your account info, capabilities, and setup checklist.
+
+```bash
+curl http://localhost:8100/api/v1/account \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+**Response:**
+```json
+{
+  "account_id": "acc_a1b2c3d4e5f6",
+  "display_name": "My Service",
+  "role": "user",
+  "capabilities": {
+    "code_generation": {"enabled": false, "unlock": "POST /api/v1/account/credentials/llm"},
+    "backend":         {"enabled": false, "unlock": "POST /api/v1/account/credentials/supabase"},
+    "publish_ios":     {"enabled": false, "unlock": "POST /api/v1/account/credentials/apple", "alternative": "Request shared store access from admin"},
+    "publish_android": {"enabled": false, "unlock": "POST /api/v1/account/credentials/google", "alternative": "Request shared store access from admin"}
+  },
+  "setup_checklist": [
+    {"step": "Register account", "done": true, "hint": null},
+    {"step": "Add LLM API key", "done": false, "hint": "POST /api/v1/account/credentials/llm with {\"api_key\": \"sk-...\"}"},
+    {"step": "Add Supabase credentials (for backend)", "done": false, "hint": "POST /api/v1/account/credentials/supabase ..."},
+    {"step": "Add Apple credentials (for iOS publishing)", "done": false, "hint": "..."},
+    {"step": "Add Google credentials (for Android publishing)", "done": false, "hint": "..."}
+  ]
+}
+```
+
+**Capabilities** are dynamically computed from your credentials. Each tells you what's enabled and what to do to unlock it.
+
+### Credentials (BYOK)
+
+You bring your own keys. Credentials are encrypted at rest.
+
+#### POST /api/v1/account/credentials/{type}
+
+Set a credential. Types: `llm`, `supabase`, `apple`, `google`.
+
+```bash
+# LLM key (required for code generation)
+curl -X POST http://localhost:8100/api/v1/account/credentials/llm \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"data": {"api_key": "sk-..."}}'
+
+# Supabase (required for backend/database features)
+curl -X POST http://localhost:8100/api/v1/account/credentials/supabase \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"data": {"project_ref": "your-project", "anon_key": "eyJ...", "management_key": "sbp_..."}}'
+
+# Apple (required for iOS publishing, or request shared store access)
+curl -X POST http://localhost:8100/api/v1/account/credentials/apple \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"data": {"team_id": "ABCDEF", "asc_key_id": "...", "asc_issuer_id": "...", "asc_key_path": "/path/to/key.p8"}}'
+
+# Google (required for Android publishing, or request shared store access)
+curl -X POST http://localhost:8100/api/v1/account/credentials/google \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"data": {"play_json_key_path": "/path/to/key.json", "keystore_path": "...", "key_alias": "...", "keystore_password": "...", "key_password": "..."}}'
+```
+
+**Response** always includes updated capabilities:
+```json
+{"credential_type": "llm", "status": "stored", "capabilities": {"code_generation": {"enabled": true}, ...}}
+```
+
+#### GET /api/v1/account/credentials
+
+List which credential types are set (no secrets exposed).
+
+```json
+{"llm": true, "supabase": false, "apple": false, "google": false}
+```
+
+#### DELETE /api/v1/account/credentials/{type}
+
+Remove a credential.
+
+### API Keys
+
+Each account can have multiple API keys (e.g. one per environment).
+
+#### POST /api/v1/account/keys
+
+Create a new API key.
+
+```bash
+curl -X POST http://localhost:8100/api/v1/account/keys \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"label": "production"}'
+```
+
+**Response:** `{"api_key": "sk_live_...", "label": "production", "message": "Save your API key..."}`
+
+#### GET /api/v1/account/keys
+
+List keys (prefix + label only, never the full key or hash).
+
+```json
+[
+  {"prefix": "sk_live_", "label": "default", "created_at": "2026-03-29T..."},
+  {"prefix": "sk_live_", "label": "production", "created_at": "2026-03-29T..."}
+]
+```
+
+#### DELETE /api/v1/account/keys/{prefix}
+
+Revoke a key by its prefix.
+
+### Admin Endpoints
+
+These require an admin-role account.
+
+#### POST /api/v1/admin/whitelist
+
+Grant shared store access (lets a user publish to your Apple/Google accounts).
+
+```bash
+curl -X POST http://localhost:8100/api/v1/admin/whitelist \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"account_id": "acc_target_user"}'
+```
+
+#### DELETE /api/v1/admin/whitelist/{account_id}
+
+Revoke shared store access.
+
+#### GET /api/v1/admin/whitelist
+
+List accounts with shared store access.
+
+## Workspace Scoping
+
+Each account only sees its own workspaces. When you call `GET /workspaces`, `POST /buildapp`, etc., results are filtered to your account. Admin accounts see all workspaces.
+
+Workspace responses now include `account_id` and `capabilities`:
+
+```json
+{
+  "slug": "my-app",
+  "path": "/projects/accounts/acc_abc123/myapp",
+  "platform": "kmp",
+  "owner_id": null,
+  "account_id": "acc_abc123",
+  "capabilities": {"code_generation": {"enabled": true}, ...}
+}
+```
+
+Build responses include `warnings` for missing capabilities:
+
+```json
+{
+  "build_id": "abc123",
+  "status": "building",
+  "warnings": ["Your app description mentions backend features but you haven't configured Supabase credentials."],
+  "capabilities": {"code_generation": {"enabled": true}, "backend": {"enabled": false, "unlock": "..."}}
+}
+```
+
+---
+
+## Build & Create Endpoints
 
 ### Build & Create
 
@@ -476,74 +697,104 @@ Swagger UI available at `http://localhost:8100/api/docs` (no auth required for d
 
 ---
 
-## Jablue Integration Guide
+## Integration Guide
+
+### For New Consumers (Bots, Workflows, Services)
+
+**Onboarding is 3 API calls — no config files, no env vars, no access to the server.**
+
+```
+register → set credentials → build apps
+```
+
+1. `POST /register` — get your `account_id` + `api_key`
+2. `POST /account/credentials/llm` — provide your LLM API key (required)
+3. `POST /account/credentials/supabase` — provide Supabase creds (optional, for backend)
+4. `GET /account` — verify your capabilities and see what's unlocked
+5. Start building: `POST /buildapp`
+
+**That's it.** You don't need access to the server, `.env` files, or Discord. The API is self-service.
+
+### Capability Tiers
+
+| Credentials provided | What you can do |
+|---------------------|----------------|
+| None | Register, view account, manage keys |
+| LLM key | Generate apps (code gen, builds, demos) |
+| LLM + Supabase | Apps with database backends |
+| LLM + Supabase + Apple | + publish to TestFlight |
+| LLM + Supabase + Google | + publish to Play Store |
+| Shared store access (admin-granted) | Publish using admin's store accounts |
 
 ### Full Workflow Example
 
 ```
-planapp → buildapp → prompt (iterate) → build → demo → save
+register → set creds → planapp → buildapp → prompt (iterate) → build → demo → save
 ```
 
-1. **Plan** the app (optional): `POST /planapp` → get structured plan
-2. **Build** from description: `POST /buildapp` → get `build_id`, poll until `status=success`
-3. **Iterate** with prompts: `POST /workspaces/{slug}/prompt` → poll until done
-4. **Build** for platform: `POST /workspaces/{slug}/build` → compile for web/android/ios
-5. **Demo**: `POST /workspaces/{slug}/demo` → get demo URL
-6. **Save**: `POST /workspaces/{slug}/save` → checkpoint progress
-7. **Appraise** (optional): `POST /workspaces/{slug}/appraise` → quality check
+1. **Register**: `POST /register` → get API key
+2. **Set LLM key**: `POST /account/credentials/llm` → enable code generation
+3. **Plan** the app (optional): `POST /planapp` → get structured plan
+4. **Build** from description: `POST /buildapp` → get `build_id`, poll until `status=success`
+5. **Iterate** with prompts: `POST /workspaces/{slug}/prompt` → poll until done
+6. **Build** for platform: `POST /workspaces/{slug}/build` → compile for web/android/ios
+7. **Demo**: `POST /workspaces/{slug}/demo` → get demo URL
+8. **Save**: `POST /workspaces/{slug}/save` → checkpoint progress
+9. **Appraise** (optional): `POST /workspaces/{slug}/appraise` → quality check
 
-### Python Example with httpx
+### Python Example: End-to-End (New Consumer)
 
 ```python
 import httpx
 import asyncio
 
-BASE = "http://localhost:8100/api/v1"
-HEADERS = {"Authorization": "Bearer YOUR_TOKEN"}
+BASE = "https://your-server:8100/api/v1"
 
-async def build_and_iterate():
+
+async def main():
     async with httpx.AsyncClient(timeout=300) as client:
-        # 1. Build a new app
-        r = await client.post(f"{BASE}/buildapp", headers=HEADERS, json={
+        # 1. Register
+        r = await client.post(f"{BASE}/register", json={
+            "display_name": "My Workflow Bot",
+        })
+        api_key = r.json()["api_key"]
+        headers = {"Authorization": f"Bearer {api_key}"}
+        print(f"Registered: {r.json()['account_id']}")
+
+        # 2. Set LLM key
+        await client.post(f"{BASE}/account/credentials/llm", headers=headers, json={
+            "data": {"api_key": "sk-your-key-here"},
+        })
+
+        # 3. Check capabilities
+        r = await client.get(f"{BASE}/account", headers=headers)
+        print(f"Code gen enabled: {r.json()['capabilities']['code_generation']['enabled']}")
+
+        # 4. Build an app
+        r = await client.post(f"{BASE}/buildapp", headers=headers, json={
             "description": "a workout tracker with exercises, sets, and reps",
             "app_name": "FitTrack",
         })
-        build = r.json()
-        build_id = build["build_id"]
+        build_id = r.json()["build_id"]
 
-        # 2. Poll until complete
+        # 5. Poll until complete
         while True:
-            r = await client.get(f"{BASE}/builds/{build_id}", headers=HEADERS)
+            r = await client.get(f"{BASE}/builds/{build_id}", headers=headers)
             status = r.json()
+            print(f"  [{status['elapsed_seconds']}s] {status['phase']}: {status['message'][:80]}")
             if status["status"] in ("success", "failed"):
                 break
             await asyncio.sleep(5)
 
         slug = status["slug"]
+        print(f"\nApp built: {slug}")
 
-        # 3. Send a follow-up prompt
-        r = await client.post(f"{BASE}/workspaces/{slug}/prompt", headers=HEADERS, json={
-            "prompt": "Add a rest timer between sets with a countdown UI",
-        })
-        prompt_id = r.json()["build_id"]
+        # 6. List your workspaces (only yours — scoped by account)
+        r = await client.get(f"{BASE}/workspaces", headers=headers)
+        print(f"Your workspaces: {[w['slug'] for w in r.json()]}")
 
-        # Poll prompt completion
-        while True:
-            r = await client.get(f"{BASE}/builds/{prompt_id}", headers=HEADERS)
-            if r.json()["status"] in ("success", "failed"):
-                break
-            await asyncio.sleep(5)
 
-        # 4. Save progress
-        await client.post(f"{BASE}/workspaces/{slug}/save", headers=HEADERS, json={
-            "message": "Added rest timer",
-        })
-
-        # 5. Check git status
-        r = await client.get(f"{BASE}/workspaces/{slug}/git/status", headers=HEADERS)
-        print(r.json()["output"])
-
-asyncio.run(build_and_iterate())
+asyncio.run(main())
 ```
 
 ### Polling Pattern
@@ -551,11 +802,11 @@ asyncio.run(build_and_iterate())
 All async operations (buildapp, prompt, demo, build, appraise) return a `build_id`. Poll `GET /builds/{build_id}` until `status` is `success` or `failed`:
 
 ```python
-async def wait_for_build(client, build_id, interval=5, timeout=600):
+async def wait_for_build(client, build_id, headers, interval=5, timeout=600):
     import time
     start = time.time()
     while time.time() - start < timeout:
-        r = await client.get(f"{BASE}/builds/{build_id}", headers=HEADERS)
+        r = await client.get(f"{BASE}/builds/{build_id}", headers=headers)
         data = r.json()
         if data["status"] in ("success", "failed"):
             return data
@@ -566,12 +817,36 @@ async def wait_for_build(client, build_id, interval=5, timeout=600):
 ### Error Handling
 
 - **401** — Missing or malformed Bearer token
-- **403** — Invalid token
+- **403** — Invalid token, or not authorized for this resource (e.g. accessing another account's workspace, or admin-only endpoint)
 - **404** — Workspace or build not found
-- **400** — Bad request (e.g. rename conflict)
+- **400** — Bad request (e.g. rename conflict, invalid credential type)
 - **500** — Internal error (check `message` field)
 
 All error responses include a `detail` field:
 ```json
 {"detail": "Workspace 'foo' not found"}
 ```
+
+### For Admin: Granting Shared Store Access
+
+If you want a consumer to publish apps under your Apple/Google accounts without sharing credentials:
+
+```bash
+# Grant
+curl -X POST http://localhost:8100/api/v1/admin/whitelist \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"account_id": "acc_their_account_id"}'
+
+# Revoke
+curl -X DELETE http://localhost:8100/api/v1/admin/whitelist/acc_their_account_id \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+
+# List who has access
+curl http://localhost:8100/api/v1/admin/whitelist \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+### For Legacy Consumers
+
+If you were using the old `.api-token` system, **nothing breaks**. Your existing token maps to the admin account automatically. All existing endpoints work identically — the only difference is that workspace responses now include `account_id` and `capabilities` fields.

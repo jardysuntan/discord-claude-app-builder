@@ -44,10 +44,30 @@ class Allowlist:
         ) + "\n")
 
     def is_allowed(self, user_id: int) -> bool:
-        return user_id in self._users
+        if user_id in self._users:
+            return True
+        # Check if user has a linked account
+        try:
+            from accounts import AccountManager
+            mgr = AccountManager()
+            return mgr.get_by_discord_id(user_id) is not None
+        except Exception:
+            return False
 
     def is_admin(self, user_id: int) -> bool:
-        return self._users.get(user_id, {}).get("role") == "admin"
+        if self._users.get(user_id, {}).get("role") == "admin":
+            return True
+        # Check account role if linked
+        try:
+            from accounts import AccountManager
+            mgr = AccountManager()
+            acct_id = mgr.get_by_discord_id(user_id)
+            if acct_id:
+                acct = mgr.get(acct_id)
+                return acct is not None and acct.role == "admin"
+        except Exception:
+            pass
+        return False
 
     def add(self, user_id: int, display_name: str, daily_cap_usd: Optional[float] = None, email: Optional[str] = None):
         if user_id in self._users:
@@ -65,6 +85,16 @@ class Allowlist:
             entry["email"] = email
         self._users[user_id] = entry
         self._save()
+
+        # Auto-create an account when a Discord user is added
+        try:
+            from accounts import AccountManager
+            mgr = AccountManager()
+            if not mgr.get_by_discord_id(user_id):
+                acct, _ = mgr.register(display_name, email=email)
+                mgr.link_discord(acct.account_id, user_id)
+        except Exception:
+            pass  # account creation is best-effort
 
     def set_email(self, user_id: int, email: str) -> bool:
         if user_id not in self._users:

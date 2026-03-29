@@ -21,17 +21,26 @@ import glob
 import os
 
 
-def _patch_supabase_credentials(ws_path: str) -> int:
+def _patch_supabase_credentials(ws_path: str, credentials: dict | None = None) -> int:
     """Replace placeholder Supabase credentials in generated source files.
-    Returns the number of files patched."""
-    if not config.SUPABASE_PROJECT_REF or not config.SUPABASE_ANON_KEY:
+    Returns the number of files patched. Uses injected credentials if provided,
+    otherwise falls back to global config."""
+    # Resolve Supabase creds from injected credentials or global config
+    project_ref = config.SUPABASE_PROJECT_REF
+    anon_key = config.SUPABASE_ANON_KEY
+    if credentials and "supabase" in credentials:
+        sb = credentials["supabase"]
+        project_ref = sb.get("project_ref", project_ref)
+        anon_key = sb.get("anon_key", anon_key)
+
+    if not project_ref or not anon_key:
         return 0
-    real_url = f"https://{config.SUPABASE_PROJECT_REF}.supabase.co"
+    real_url = f"https://{project_ref}.supabase.co"
     placeholders = {
         "https://YOUR_PROJECT.supabase.co": real_url,
-        "YOUR_PROJECT.supabase.co": f"{config.SUPABASE_PROJECT_REF}.supabase.co",
-        "YOUR_ANON_KEY": config.SUPABASE_ANON_KEY,
-        "your-project-ref.supabase.co": f"{config.SUPABASE_PROJECT_REF}.supabase.co",
+        "YOUR_PROJECT.supabase.co": f"{project_ref}.supabase.co",
+        "YOUR_ANON_KEY": anon_key,
+        "your-project-ref.supabase.co": f"{project_ref}.supabase.co",
         "https://your-project-ref.supabase.co": real_url,
     }
     patched = 0
@@ -90,7 +99,7 @@ Rules:
 
 def build_feature_prompt(
     app_name: str, description: str, schema_sql: Optional[str] = None,
-    db_schema: Optional[str] = None,
+    db_schema: Optional[str] = None, credentials: dict | None = None,
 ) -> str:
     base = f"""Build a complete Kotlin Multiplatform app called "{app_name}".
 
@@ -110,8 +119,16 @@ Requirements:
 
 Write complete, working code. No TODOs or placeholders."""
 
-    if schema_sql and config.SUPABASE_ANON_KEY:
-        supabase_url = f"https://{config.SUPABASE_PROJECT_REF}.supabase.co"
+    # Resolve Supabase creds
+    sb_project_ref = config.SUPABASE_PROJECT_REF
+    sb_anon_key = config.SUPABASE_ANON_KEY
+    if credentials and "supabase" in credentials:
+        sb = credentials["supabase"]
+        sb_project_ref = sb.get("project_ref", sb_project_ref)
+        sb_anon_key = sb.get("anon_key", sb_anon_key)
+
+    if schema_sql and sb_anon_key:
+        supabase_url = f"https://{sb_project_ref}.supabase.co"
         schema_note = ""
         if db_schema:
             schema_note = (
@@ -125,7 +142,7 @@ Write complete, working code. No TODOs or placeholders."""
 The database has been provisioned. Connect to it using these details:
 
 - Supabase URL: {supabase_url}
-- Anon key: {config.SUPABASE_ANON_KEY}
+- Anon key: {sb_anon_key}
 {schema_note}
 IMPORTANT: Use these EXACT values above in your code. Do NOT use placeholders
 like "YOUR_PROJECT" or "YOUR_ANON_KEY". The real credentials are provided above.
@@ -162,6 +179,8 @@ async def handle_buildapp(
     is_admin: bool = True,
     owner_id: Optional[int] = None,
     app_name: Optional[str] = None,
+    account_id: Optional[str] = None,
+    credentials: dict | None = None,
 ) -> Optional[str]:
     if not description:
         await on_status("Usage: `/buildapp <description of the app>`", None)
@@ -206,7 +225,7 @@ async def handle_buildapp(
     # 1. Scaffold
     await on_status(f"🏗️ Creating **{app_name}** (Kotlin Multiplatform)...", None)
     await on_status("💡 *I'm still listening — feel free to send other commands while this runs.*", None)
-    scaffold_result = await create_kmp_project(app_name, registry, owner_id=owner_id)
+    scaffold_result = await create_kmp_project(app_name, registry, owner_id=owner_id, account_id=account_id)
     await on_status(scaffold_result.message, None)
 
     if not scaffold_result.success:
@@ -294,7 +313,22 @@ async def handle_buildapp(
             await on_status("⚠️ Could not extract SQL from schema response. Continuing without backend.", None)
 
     # 3. Claude builds features + auto-fix for Android first
-    feature_prompt = build_feature_prompt(app_name, description, schema_sql=schema_sql, db_schema=app_schema)
+    # Smart warnings: check if description implies backend but no Supabase creds
+    if credentials is not None:
+        backend_keywords = {"database", "backend", "user accounts", "login", "signup", "auth",
+                            "store data", "save data", "persist", "server"}
+        desc_lower = description.lower()
+        has_backend_hint = any(kw in desc_lower for kw in backend_keywords)
+        if has_backend_hint and "supabase" not in credentials:
+            await on_status(
+                "⚠️ Your app description mentions backend/data features but you haven't "
+                "configured Supabase credentials. Add them via POST /api/v1/account/credentials/supabase "
+                "for full backend support. Continuing without backend.",
+                None,
+            )
+
+    feature_prompt = build_feature_prompt(app_name, description, schema_sql=schema_sql,
+                                          db_schema=app_schema, credentials=credentials)
 
     async def loop_status(msg):
         await on_status(msg, None)
@@ -313,7 +347,7 @@ async def handle_buildapp(
 
     # Patch any placeholder Supabase credentials Claude may have left
     if schema_sql:
-        patched = _patch_supabase_credentials(ws_path)
+        patched = _patch_supabase_credentials(ws_path, credentials=credentials)
         if patched:
             await on_status(f"🔑 Injected Supabase credentials into {patched} file(s).", None)
 

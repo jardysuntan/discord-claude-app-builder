@@ -3,9 +3,11 @@ workspaces.py — Workspace registry backed by workspaces.json.
 Supports per-user ownership with auto-migration from legacy format.
 """
 
+from __future__ import annotations
+
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 import config
 
@@ -13,8 +15,8 @@ import config
 class WorkspaceRegistry:
     def __init__(self):
         self._workspaces: dict[str, dict] = {}  # key -> {"path": str, "owner_id": int}
-        self._user_defaults: dict[int, str] = {}
-        self._user_platforms: dict[int, str] = {}
+        self._user_defaults: dict[int | str, str] = {}
+        self._user_platforms: dict[int | str, str] = {}
         self._user_tips_hidden: set[int] = set()
         self._user_tip_index: dict[int, int] = {}
         self._defaults_path = Path(config.WORKSPACES_PATH).parent / "user_defaults.json"
@@ -36,7 +38,12 @@ class WorkspaceRegistry:
             try:
                 with open(self._defaults_path) as f:
                     raw = json.load(f)
-                self._user_defaults = {int(k): v for k, v in raw.items()}
+                self._user_defaults = {}
+                for k, v in raw.items():
+                    try:
+                        self._user_defaults[int(k)] = v
+                    except ValueError:
+                        self._user_defaults[k] = v  # account_id string key
             except (json.JSONDecodeError, ValueError):
                 self._user_defaults = {}
         # Load persisted platform preferences
@@ -44,7 +51,12 @@ class WorkspaceRegistry:
             try:
                 with open(self._platforms_path) as f:
                     raw = json.load(f)
-                self._user_platforms = {int(k): v for k, v in raw.items()}
+                self._user_platforms = {}
+                for k, v in raw.items():
+                    try:
+                        self._user_platforms[int(k)] = v
+                    except ValueError:
+                        self._user_platforms[k] = v  # account_id string key
             except (json.JSONDecodeError, ValueError):
                 self._user_platforms = {}
         # Load persisted tips preferences (backward-compat: old format was a plain list)
@@ -85,32 +97,41 @@ class WorkspaceRegistry:
             self._save()
         return result
 
-    def list_keys(self, owner_id: Optional[int] = None, user_email: Optional[str] = None) -> list[str]:
-        """List workspace keys. If owner_id given, filter to that user's owned + collaborating workspaces."""
-        if owner_id is None:
+    def list_keys(self, owner_id: Optional[int] = None, user_email: Optional[str] = None,
+                  account_id: Optional[str] = None) -> list[str]:
+        """List workspace keys. Filter by account_id or owner_id if given."""
+        if owner_id is None and account_id is None:
             return sorted(self._workspaces.keys())
         result = []
         for k, v in self._workspaces.items():
-            if v.get("owner_id") == owner_id:
+            # Match by account_id first
+            if account_id and v.get("account_id") == account_id:
+                result.append(k)
+                continue
+            if owner_id is not None and v.get("owner_id") == owner_id:
                 result.append(k)
                 continue
             # Check if user is a collaborator (by user_id or email)
-            for c in v.get("collaborators", []):
-                if c.get("user_id") == owner_id:
-                    result.append(k)
-                    break
-                if user_email and c.get("email", "").lower() == user_email.lower():
-                    result.append(k)
-                    break
+            if owner_id is not None:
+                for c in v.get("collaborators", []):
+                    if c.get("user_id") == owner_id:
+                        result.append(k)
+                        break
+                    if user_email and c.get("email", "").lower() == user_email.lower():
+                        result.append(k)
+                        break
         return sorted(result)
 
-    def can_access(self, key: str, user_id: int, is_admin: bool, user_email: Optional[str] = None) -> bool:
+    def can_access(self, key: str, user_id: int, is_admin: bool, user_email: Optional[str] = None,
+                   account_id: Optional[str] = None) -> bool:
         """Check if user can access a workspace. Admin can access all. Collaborators can access."""
         if is_admin:
             return True
         entry = self._workspaces.get(key.lower())
         if not entry:
             return False
+        if account_id and entry.get("account_id") == account_id:
+            return True
         if entry.get("owner_id") == user_id:
             return True
         for c in entry.get("collaborators", []):
@@ -120,16 +141,23 @@ class WorkspaceRegistry:
                 return True
         return False
 
-    def is_owner(self, key: str, user_id: int) -> bool:
+    def is_owner(self, key: str, user_id: int = 0, account_id: Optional[str] = None) -> bool:
         """Strict owner check — collaborators do not pass."""
         entry = self._workspaces.get(key.lower())
         if not entry:
             return False
+        if account_id and entry.get("account_id") == account_id:
+            return True
         return entry.get("owner_id") == user_id
 
     def get_owner(self, key: str) -> Optional[int]:
         entry = self._workspaces.get(key.lower())
         return entry.get("owner_id") if entry else None
+
+    def get_account_id(self, key: str) -> Optional[str]:
+        """Return the account_id for a workspace, or None."""
+        entry = self._workspaces.get(key.lower())
+        return entry.get("account_id") if entry else None
 
     def add_collaborator(self, key: str, name: str, email: str, user_id: Optional[int] = None):
         entry = self._workspaces.get(key.lower())
@@ -225,11 +253,15 @@ class WorkspaceRegistry:
             self._workspaces[k]["protected"] = protected
             self._save()
 
-    def add(self, key: str, path: str, owner_id: Optional[int] = None):
-        self._workspaces[key.lower()] = {
+    def add(self, key: str, path: str, owner_id: Optional[int] = None,
+            account_id: Optional[str] = None):
+        entry = {
             "path": path,
             "owner_id": owner_id or config.DISCORD_ALLOWED_USER_ID,
         }
+        if account_id:
+            entry["account_id"] = account_id
+        self._workspaces[key.lower()] = entry
         self._save()
 
     def remove(self, key: str, force: bool = False):
@@ -258,17 +290,17 @@ class WorkspaceRegistry:
         self._save_defaults()
         return True
 
-    def set_default(self, user_id: int, key: str) -> bool:
+    def set_default(self, user_id: int | str, key: str) -> bool:
         if not self.exists(key):
             return False
         self._user_defaults[user_id] = key.lower()
         self._save_defaults()
         return True
 
-    def get_default(self, user_id: int) -> Optional[str]:
+    def get_default(self, user_id: int | str) -> Optional[str]:
         return self._user_defaults.get(user_id, self._global_default)
 
-    def resolve(self, key_or_none: Optional[str], user_id: int) -> tuple[Optional[str], Optional[str]]:
+    def resolve(self, key_or_none: Optional[str], user_id: int | str) -> tuple[Optional[str], Optional[str]]:
         key = key_or_none or self.get_default(user_id)
         if not key:
             return None, None
@@ -283,11 +315,11 @@ class WorkspaceRegistry:
         with open(self._defaults_path, "w") as f:
             json.dump({str(k): v for k, v in self._user_defaults.items()}, f, indent=2)
 
-    def set_platform(self, user_id: int, platform: str):
+    def set_platform(self, user_id: int | str, platform: str):
         self._user_platforms[user_id] = platform.lower()
         self._save_platforms()
 
-    def get_platform(self, user_id: int) -> Optional[str]:
+    def get_platform(self, user_id: int | str) -> Optional[str]:
         return self._user_platforms.get(user_id)
 
     def _save_platforms(self):

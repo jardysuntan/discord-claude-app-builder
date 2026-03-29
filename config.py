@@ -83,6 +83,11 @@ SUPABASE_PROJECT_REF: str = os.getenv("SUPABASE_PROJECT_REF", "")
 SUPABASE_MANAGEMENT_KEY: str = os.getenv("SUPABASE_MANAGEMENT_KEY", "")
 SUPABASE_ANON_KEY: str = os.getenv("SUPABASE_ANON_KEY", "")
 
+# ── Accounts / Multi-Tenant ────────────────────────────────────────────
+ACCOUNTS_PATH: str = os.getenv("ACCOUNTS_PATH", "./accounts.json")
+CREDENTIAL_ENCRYPTION_KEY: str = os.getenv("CREDENTIAL_ENCRYPTION_KEY", "")
+RUN_MODE: str = os.getenv("RUN_MODE", "full")  # "full", "api_only", "bot_only"
+
 # ── Queue & Budget ──────────────────────────────────────────────────────
 DAILY_TOKEN_CAP_USD: float = float(os.getenv("DAILY_TOKEN_CAP_USD", "50"))
 DEFAULT_USER_DAILY_CAP_USD: float = float(os.getenv("DEFAULT_USER_DAILY_CAP_USD", "10"))
@@ -99,10 +104,11 @@ AUTO_FIX_ON_FAILURE: bool = os.getenv("AUTO_FIX_ON_FAILURE", "1") == "1"
 
 def validate() -> list[str]:
     problems = []
-    if not DISCORD_BOT_TOKEN:
-        problems.append("DISCORD_BOT_TOKEN is not set")
-    if DISCORD_ALLOWED_USER_ID == 0:
-        problems.append("DISCORD_ALLOWED_USER_ID is not set")
+    if RUN_MODE in ("full", "bot_only"):
+        if not DISCORD_BOT_TOKEN:
+            problems.append("DISCORD_BOT_TOKEN is not set")
+        if DISCORD_ALLOWED_USER_ID == 0:
+            problems.append("DISCORD_ALLOWED_USER_ID is not set")
     if not Path(WORKSPACES_PATH).exists():
         problems.append(f"workspaces.json not found at {WORKSPACES_PATH}")
     return problems
@@ -122,3 +128,5 @@ def print_config_summary():
     print(f"  Play Store:      {'configured' if PLAY_JSON_KEY_PATH else 'not configured'}")
     print(f"  Supabase:        {'configured' if SUPABASE_PROJECT_REF and SUPABASE_MANAGEMENT_KEY else 'not configured'}")
     print(f"  CF Pages:        {'configured' if CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID else 'not configured'}")
+    print(f"  Run mode:        {RUN_MODE}")
+    print(f"  Accounts:        {ACCOUNTS_PATH}")

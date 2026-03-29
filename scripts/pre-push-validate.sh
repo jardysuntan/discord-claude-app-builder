@@ -62,11 +62,11 @@ fi
 
 # ── 3. Unit tests ────────────────────────────────────────────────────────
 echo -n "   Running unit tests... "
-if $PYTHON -m pytest test_webhook_events.py -q --no-header 2>/dev/null | tail -1 | grep -q "passed"; then
+if $PYTHON -m pytest test_webhook_events.py test_accounts.py -q --no-header 2>/dev/null | tail -1 | grep -q "passed"; then
     echo -e "${PASS}"
 else
     echo -e "${FAIL}"
-    echo -e "   ${FAIL} ${BOLD}Unit tests failed. Run: $PYTHON -m pytest test_webhook_events.py -v${RESET}"
+    echo -e "   ${FAIL} ${BOLD}Unit tests failed. Run: $PYTHON -m pytest test_webhook_events.py test_accounts.py -v${RESET}"
     exit 1
 fi
 

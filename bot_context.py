@@ -18,6 +18,7 @@ from workspaces import WorkspaceRegistry
 from claude_runner import ClaudeRunner
 from cost_tracker import CostTracker
 from allowlist import Allowlist
+from accounts import AccountManager
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -54,6 +55,7 @@ class BotContext:
     claude: ClaudeRunner
     cost_tracker: CostTracker
     allowlist: Allowlist
+    account_mgr: AccountManager
 
     # Runtime toggles
     maintenance_mode: bool = False

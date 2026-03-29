@@ -17,6 +17,7 @@ from workspaces import WorkspaceRegistry
 from claude_runner import ClaudeRunner
 from cost_tracker import CostTracker
 from allowlist import Allowlist
+from accounts import AccountManager
 from bot_context import BotContext
 from handlers import COMMAND_HANDLERS
 from handlers.prompt_handler import handle_prompt
@@ -41,6 +42,7 @@ registry = WorkspaceRegistry()
 claude = ClaudeRunner()
 cost_tracker = CostTracker()
 allowlist = Allowlist()
+account_mgr = AccountManager()
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -53,6 +55,7 @@ ctx = BotContext(
     claude=claude,
     cost_tracker=cost_tracker,
     allowlist=allowlist,
+    account_mgr=account_mgr,
     start_time=time.time(),
 )
 
@@ -172,10 +175,13 @@ async def on_message(message: discord.Message):
         )
         if shares_guild:
             display = message.author.display_name
-            allowlist.add(user_id, display)
+            allowlist.add(user_id, display)  # also auto-creates account
             is_allowed = True
         else:
             return
+
+    # Resolve account_id for this Discord user
+    account_id = account_mgr.get_by_discord_id(user_id)
 
     # ── Claude prompts ───────────────────────────────────────────────────
     if isinstance(parsed, (WorkspacePrompt, FallbackPrompt)):

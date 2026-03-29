@@ -33,6 +33,7 @@ class BuildRequest:
     platform: str = "web"
     skip_supabase: bool = False
     webhook_url: str | None = None
+    account_id: str | None = None
 
 @dataclass
 class BuildStatus:
@@ -57,6 +58,7 @@ class WorkspaceInfo:
     path: str
     platform: str
     owner_id: int | None
+    account_id: str | None = None
 
 
 # ── Singleton state ──────────────────────────────────────────────────────────
@@ -205,6 +207,33 @@ def _get_claude() -> ClaudeRunner:
     return _claude
 
 
+def _resolve_credentials(account_id: str | None) -> dict | None:
+    """Fetch decrypted credentials from AccountManager for a given account.
+    Falls back to global config values for admin/legacy accounts."""
+    if not account_id or account_id == "legacy_admin":
+        return None  # use global config (backward compat)
+
+    try:
+        from accounts import AccountManager
+        mgr = AccountManager()
+        acct = mgr.get(account_id)
+        if not acct:
+            return None
+
+        # Admin accounts also fall back to global config
+        if acct.role == "admin":
+            return None
+
+        creds = {}
+        for cred_type in ("llm", "supabase", "apple", "google"):
+            data = mgr.get_credential(account_id, cred_type)
+            if data:
+                creds[cred_type] = data
+        return creds if creds else None
+    except Exception:
+        return None
+
+
 # ── Build tracking ───────────────────────────────────────────────────────────
 
 def get_build(build_id: str) -> BuildStatus | None:
@@ -271,6 +300,7 @@ async def build_app(request: BuildRequest) -> BuildStatus:
         status.status = "building"
 
         try:
+            credentials = _resolve_credentials(request.account_id)
             slug = await handle_buildapp(
                 description=request.description,
                 registry=registry,
@@ -280,6 +310,8 @@ async def build_app(request: BuildRequest) -> BuildStatus:
                 is_admin=True,
                 owner_id=None,
                 app_name=request.app_name,
+                account_id=request.account_id,
+                credentials=credentials,
             )
             status.slug = slug or ""
             status.elapsed_seconds = int(time.time() - start)
@@ -389,17 +421,21 @@ async def send_prompt(request: PromptRequest) -> BuildStatus:
     return status
 
 
-async def list_workspaces() -> list[WorkspaceInfo]:
+async def list_workspaces(account_id: str | None = None) -> list[WorkspaceInfo]:
     registry = _get_registry()
+    # Admin accounts (or no account filter) see all workspaces
+    keys = registry.list_keys(account_id=account_id) if account_id else registry.list_keys()
     result = []
-    for key in registry.list_keys():
+    for key in keys:
         path = registry.get_path(key)
         owner = registry.get_owner(key)
+        ws_account_id = registry.get_account_id(key)
         result.append(WorkspaceInfo(
             slug=key,
             path=path or "",
             platform="kmp",
             owner_id=owner,
+            account_id=ws_account_id,
         ))
     return result
 
@@ -414,6 +450,7 @@ async def get_workspace(slug: str) -> WorkspaceInfo | None:
         path=path,
         platform="kmp",
         owner_id=registry.get_owner(slug),
+        account_id=registry.get_account_id(slug),
     )
 
 
@@ -465,8 +502,8 @@ async def demo_workspace(slug: str, platform: str = "web") -> BuildStatus:
     return status
 
 
-async def set_default_workspace(user_id: int, slug: str) -> bool:
-    """Set a workspace as the active default for a user."""
+async def set_default_workspace(user_id: int | str, slug: str) -> bool:
+    """Set a workspace as the active default for a user or account."""
     registry = _get_registry()
     return registry.set_default(user_id, slug)
 

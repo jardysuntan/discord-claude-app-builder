@@ -120,7 +120,39 @@ async def run_api_smoketest(
                 "POST newsession", True, "skipped (no workspaces)",
             ))
 
-    # 11. CF Pages credentials valid (runs outside the base_url client)
+        # 12. POST /register → new account
+        reg_check, reg_data = await _check_register(client)
+        result.checks.append(reg_check)
+
+        # 13. GET /account → account info with capabilities
+        if reg_data:
+            reg_headers = {"Authorization": f"Bearer {reg_data['api_key']}"}
+            result.checks.append(await _check_account_info(client, reg_headers))
+
+            # 14. POST /account/credentials/llm → set credential
+            result.checks.append(await _check_set_credential(client, reg_headers))
+
+            # 15. GET /account/credentials → list credentials
+            result.checks.append(await _check_list_credentials(client, reg_headers))
+
+            # 16. DELETE /account/credentials/llm → remove credential
+            result.checks.append(await _check_delete_credential(client, reg_headers))
+
+            # 17. POST /account/keys → create new key
+            result.checks.append(await _check_create_key(client, reg_headers))
+
+            # 18. GET /account/keys → list keys
+            result.checks.append(await _check_list_keys(client, reg_headers))
+
+            # 19. Workspace scoping — new account should see no workspaces
+            result.checks.append(await _check_workspace_scoping(client, reg_headers))
+        else:
+            for name in ("GET /account info", "POST set credential", "GET list credentials",
+                         "DELETE credential", "POST create key", "GET list keys",
+                         "workspace scoping"):
+                result.checks.append(ApiCheckResult(name, True, "skipped (registration failed)"))
+
+    # 20. CF Pages credentials valid (runs outside the base_url client)
     result.checks.append(await _check_cf_credentials())
 
     result.success = all(c.passed for c in result.checks)
@@ -266,6 +298,181 @@ async def _check_newsession(
         if r.status_code != 200:
             return ApiCheckResult(name, False, f"status {r.status_code}")
         return ApiCheckResult(name, True)
+    except Exception as exc:
+        return ApiCheckResult(name, False, str(exc)[:200])
+
+
+async def _check_register(
+    client: httpx.AsyncClient,
+) -> tuple[ApiCheckResult, Optional[dict]]:
+    name = "POST /register → new account"
+    try:
+        r = await client.post(
+            "/api/v1/register",
+            json={"display_name": "SmokeTest User", "email": "smoketest@test.local"},
+        )
+        if r.status_code != 200:
+            return ApiCheckResult(name, False, f"status {r.status_code}"), None
+        body = r.json()
+        if "account_id" not in body or "api_key" not in body:
+            return ApiCheckResult(name, False, f"missing keys, got: {list(body.keys())}"), None
+        if not body["account_id"].startswith("acc_"):
+            return ApiCheckResult(name, False, f"bad account_id format: {body['account_id']}"), None
+        if not body["api_key"].startswith("sk_live_"):
+            return ApiCheckResult(name, False, f"bad api_key format"), None
+        return ApiCheckResult(name, True, f"account_id={body['account_id']}"), body
+    except Exception as exc:
+        return ApiCheckResult(name, False, str(exc)[:200]), None
+
+
+async def _check_account_info(
+    client: httpx.AsyncClient, headers: dict,
+) -> ApiCheckResult:
+    name = "GET /account → info + capabilities"
+    try:
+        r = await client.get("/api/v1/account", headers=headers)
+        if r.status_code != 200:
+            return ApiCheckResult(name, False, f"status {r.status_code}")
+        body = r.json()
+        required = {"account_id", "capabilities", "setup_checklist"}
+        missing = required - set(body.keys())
+        if missing:
+            return ApiCheckResult(name, False, f"missing keys: {missing}")
+        # Capabilities should have expected structure
+        caps = body["capabilities"]
+        if "code_generation" not in caps:
+            return ApiCheckResult(name, False, f"missing code_generation in capabilities")
+        if caps["code_generation"]["enabled"] is not False:
+            return ApiCheckResult(name, False, "code_generation should be disabled without LLM key")
+        return ApiCheckResult(name, True)
+    except Exception as exc:
+        return ApiCheckResult(name, False, str(exc)[:200])
+
+
+async def _check_set_credential(
+    client: httpx.AsyncClient, headers: dict,
+) -> ApiCheckResult:
+    name = "POST /account/credentials/llm → store"
+    try:
+        r = await client.post(
+            "/api/v1/account/credentials/llm",
+            headers=headers,
+            json={"data": {"api_key": "sk-smoketest-fake-key"}},
+        )
+        if r.status_code != 200:
+            return ApiCheckResult(name, False, f"status {r.status_code}")
+        body = r.json()
+        if body.get("status") != "stored":
+            return ApiCheckResult(name, False, f"unexpected status: {body.get('status')}")
+        # Capabilities should now show code_generation enabled
+        caps = body.get("capabilities", {})
+        if not caps.get("code_generation", {}).get("enabled"):
+            return ApiCheckResult(name, False, "code_generation not enabled after setting LLM key")
+        return ApiCheckResult(name, True, "code_generation now enabled")
+    except Exception as exc:
+        return ApiCheckResult(name, False, str(exc)[:200])
+
+
+async def _check_list_credentials(
+    client: httpx.AsyncClient, headers: dict,
+) -> ApiCheckResult:
+    name = "GET /account/credentials → list"
+    try:
+        r = await client.get("/api/v1/account/credentials", headers=headers)
+        if r.status_code != 200:
+            return ApiCheckResult(name, False, f"status {r.status_code}")
+        body = r.json()
+        if body.get("llm") is not True:
+            return ApiCheckResult(name, False, f"llm should be True, got: {body}")
+        if body.get("supabase") is not False:
+            return ApiCheckResult(name, False, f"supabase should be False, got: {body}")
+        return ApiCheckResult(name, True)
+    except Exception as exc:
+        return ApiCheckResult(name, False, str(exc)[:200])
+
+
+async def _check_delete_credential(
+    client: httpx.AsyncClient, headers: dict,
+) -> ApiCheckResult:
+    name = "DELETE /account/credentials/llm → remove"
+    try:
+        r = await client.delete("/api/v1/account/credentials/llm", headers=headers)
+        if r.status_code != 200:
+            return ApiCheckResult(name, False, f"status {r.status_code}")
+        body = r.json()
+        if body.get("status") != "deleted":
+            return ApiCheckResult(name, False, f"unexpected status: {body.get('status')}")
+        # code_generation should now be disabled
+        caps = body.get("capabilities", {})
+        if caps.get("code_generation", {}).get("enabled"):
+            return ApiCheckResult(name, False, "code_generation still enabled after delete")
+        return ApiCheckResult(name, True)
+    except Exception as exc:
+        return ApiCheckResult(name, False, str(exc)[:200])
+
+
+async def _check_create_key(
+    client: httpx.AsyncClient, headers: dict,
+) -> ApiCheckResult:
+    name = "POST /account/keys → new key"
+    try:
+        r = await client.post(
+            "/api/v1/account/keys",
+            headers=headers,
+            json={"label": "smoketest-key"},
+        )
+        if r.status_code != 200:
+            return ApiCheckResult(name, False, f"status {r.status_code}")
+        body = r.json()
+        if "api_key" not in body:
+            return ApiCheckResult(name, False, f"missing api_key in response")
+        if not body["api_key"].startswith("sk_live_"):
+            return ApiCheckResult(name, False, "bad key format")
+        return ApiCheckResult(name, True)
+    except Exception as exc:
+        return ApiCheckResult(name, False, str(exc)[:200])
+
+
+async def _check_list_keys(
+    client: httpx.AsyncClient, headers: dict,
+) -> ApiCheckResult:
+    name = "GET /account/keys → list"
+    try:
+        r = await client.get("/api/v1/account/keys", headers=headers)
+        if r.status_code != 200:
+            return ApiCheckResult(name, False, f"status {r.status_code}")
+        body = r.json()
+        if not isinstance(body, list):
+            return ApiCheckResult(name, False, f"expected list, got {type(body).__name__}")
+        # Should have at least 2 keys (default + smoketest-key)
+        if len(body) < 2:
+            return ApiCheckResult(name, False, f"expected ≥2 keys, got {len(body)}")
+        labels = {k.get("label") for k in body}
+        if "smoketest-key" not in labels:
+            return ApiCheckResult(name, False, f"smoketest-key not found in {labels}")
+        # Keys should have prefix but no hash
+        for k in body:
+            if "key_hash" in k:
+                return ApiCheckResult(name, False, "key_hash leaked in response!")
+        return ApiCheckResult(name, True, f"{len(body)} keys")
+    except Exception as exc:
+        return ApiCheckResult(name, False, str(exc)[:200])
+
+
+async def _check_workspace_scoping(
+    client: httpx.AsyncClient, headers: dict,
+) -> ApiCheckResult:
+    name = "GET /workspaces → scoped (new account sees none)"
+    try:
+        r = await client.get("/api/v1/workspaces", headers=headers)
+        if r.status_code != 200:
+            return ApiCheckResult(name, False, f"status {r.status_code}")
+        body = r.json()
+        if not isinstance(body, list):
+            return ApiCheckResult(name, False, f"expected list, got {type(body).__name__}")
+        if len(body) != 0:
+            return ApiCheckResult(name, False, f"new account should see 0 workspaces, saw {len(body)}")
+        return ApiCheckResult(name, True, "0 workspaces (correct)")
     except Exception as exc:
         return ApiCheckResult(name, False, str(exc)[:200])
 
