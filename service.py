@@ -9,6 +9,7 @@ import shutil
 import time
 import uuid
 import logging
+from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Callable, Awaitable, Optional
 
@@ -111,24 +112,76 @@ def get_analytics() -> dict:
     }
 
 
-async def _fire_webhook(status: BuildStatus):
-    """Fire webhook if configured on this build."""
-    if not status.webhook_url:
+async def _send_webhook_event(webhook_url: str | None, event: dict):
+    """Fire-and-forget webhook POST. Never blocks the build."""
+    if not webhook_url:
         return
     try:
         import httpx
-        async with httpx.AsyncClient() as client:
-            await client.post(status.webhook_url, json={
-                "build_id": status.build_id,
-                "status": status.status,
-                "slug": status.slug,
-                "phase": status.phase,
-                "message": status.message,
-                "elapsed_seconds": status.elapsed_seconds,
-                "platforms": status.platforms,
-            }, timeout=10)
+        async with httpx.AsyncClient(timeout=5) as client:
+            await client.post(webhook_url, json=event)
     except Exception as e:
-        logger.warning(f"Webhook failed for {status.build_id}: {e}")
+        logger.warning(f"Webhook delivery failed: {e}")
+
+
+def _infer_phase(msg: str, current_phase: str) -> str:
+    """Infer build phase from status message content."""
+    m = msg.lower()
+    if "scaffold" in m or "creating" in m or "🏗️" in msg:
+        return "scaffolding"
+    if "credential" in m or "🔑" in msg:
+        return "patching_credentials"
+    if "schema" in m and "design" in m:
+        return "schema_design"
+    if ("supabase" in m or "database" in m or "🗄️" in msg) and "ready" not in m:
+        return "schema_deploy"
+    if "ios" in m and ("fix" in m or "⚠️" in msg):
+        return "fixing"
+    if "ios" in m and "demo" in m:
+        return "demo_ios"
+    if "ios" in m:
+        return "building_ios"
+    if "android" in m and ("fix" in m or "⚠️" in msg):
+        return "fixing"
+    if "android" in m and "demo" in m:
+        return "demo_android"
+    if "android" in m:
+        return "building_android"
+    if "web" in m and ("fix" in m or "⚠️" in msg):
+        return "fixing"
+    if "web" in m and "demo" in m:
+        return "demo_web"
+    if "web" in m:
+        return "building_web"
+    if "deploy" in m:
+        return "deploying"
+    if "demo" in m or "📱" in msg:
+        return "demo_android"
+    if "saving" in m or "commit" in m:
+        return "saving"
+    return current_phase
+
+
+def _classify_event(msg: str, phase: str) -> tuple[str, dict]:
+    """Classify a status message into an event type and detail dict."""
+    m = msg.lower()
+    # Platform complete
+    if ("✅" in msg and "build" in m) or ("passed" in m and any(p in m for p in ["android", "web", "ios"])):
+        platform = "android" if "android" in m else "web" if "web" in m else "ios" if "ios" in m else "unknown"
+        return "platform_complete", {"platform": platform, "success": True}
+    # Demo ready
+    if ("live →" in m or "preview →" in m) and "http" in m:
+        url = ""
+        for word in msg.split():
+            if word.startswith("http"):
+                url = word
+        platform = "web" if "web" in m else "android" if "android" in m else "ios"
+        return "demo_ready", {"platform": platform, "url": url}
+    # Issue (non-fatal)
+    if any(w in m for w in ["⚠️", "error", "fail", "retry", "❌"]) and "fatal" not in m:
+        return "issue", {"error": msg}
+    # Default: progress
+    return "progress", {}
 
 
 def init(registry: WorkspaceRegistry | None = None, claude: ClaudeRunner | None = None):
@@ -180,23 +233,40 @@ async def build_app(request: BuildRequest) -> BuildStatus:
         registry = _get_registry()
         claude = _get_claude()
         start = time.time()
+        webhook_url = request.webhook_url
+
+        # Send "started" event
+        await _send_webhook_event(webhook_url, {
+            "build_id": build_id,
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "event": "started",
+            "phase": "scaffolding",
+            "message": f"Building {request.app_name or 'app'}...",
+            "elapsed_seconds": 0,
+            "detail": {
+                "app_name": request.app_name,
+                "description": (request.description or "")[:200],
+            },
+        })
 
         async def on_status(msg: str, _attachment: str | None = None):
             status.message = msg
             status.elapsed_seconds = int(time.time() - start)
             status.logs.append(msg)
-            # Infer phase from message content
-            if "🏗️" in msg or "Creating" in msg:
-                status.phase = "scaffolding"
-            elif "🗄️" in msg or "schema" in msg.lower():
-                status.phase = "schema"
-            elif "🧠" in msg or "Claude" in msg:
-                status.phase = "building"
-            elif "⚠️" in msg or "fix" in msg.lower():
-                status.phase = "fixing"
-            elif "🌐" in msg or "📱" in msg or "demo" in msg.lower():
-                status.phase = "demoing"
+            status.phase = _infer_phase(msg, status.phase)
             logger.info(f"[build:{build_id}] {msg[:120]}")
+
+            # Dispatch real-time webhook event
+            event_type, detail = _classify_event(msg, status.phase)
+            await _send_webhook_event(webhook_url, {
+                "build_id": build_id,
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "event": event_type,
+                "phase": status.phase,
+                "message": msg,
+                "elapsed_seconds": status.elapsed_seconds,
+                "detail": detail,
+            })
 
         status.status = "building"
 
@@ -220,6 +290,21 @@ async def build_app(request: BuildRequest) -> BuildStatus:
             else:
                 status.status = "failed"
                 status.phase = "complete"
+
+            # Send "complete" event
+            await _send_webhook_event(webhook_url, {
+                "build_id": build_id,
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "event": "complete",
+                "phase": "complete",
+                "message": f"Build {'succeeded' if status.status == 'success' else 'failed'}",
+                "elapsed_seconds": status.elapsed_seconds,
+                "detail": {
+                    "status": status.status,
+                    "slug": status.slug,
+                    "platforms": status.platforms,
+                },
+            })
         except Exception as e:
             logger.exception(f"[build:{build_id}] Build failed with exception")
             status.status = "failed"
@@ -227,8 +312,18 @@ async def build_app(request: BuildRequest) -> BuildStatus:
             status.message = f"Build error: {e}"
             status.elapsed_seconds = int(time.time() - start)
 
+            # Send "error" event
+            await _send_webhook_event(webhook_url, {
+                "build_id": build_id,
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "event": "error",
+                "phase": "complete",
+                "message": f"Build error: {e}",
+                "elapsed_seconds": status.elapsed_seconds,
+                "detail": {"error": str(e), "recoverable": False},
+            })
+
         _track_build("buildapp", status.slug or "unknown", status.status == "success", status.elapsed_seconds)
-        await _fire_webhook(status)
 
     asyncio.create_task(_run_build())
     return status
@@ -280,7 +375,15 @@ async def send_prompt(request: PromptRequest) -> BuildStatus:
             status.message = f"Error: {e}"
 
         _track_build("prompt", slug, status.status == "success", status.elapsed_seconds)
-        await _fire_webhook(status)
+        await _send_webhook_event(status.webhook_url, {
+            "build_id": status.build_id,
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "event": "complete",
+            "phase": "complete",
+            "message": status.message,
+            "elapsed_seconds": status.elapsed_seconds,
+            "detail": {"status": status.status, "slug": status.slug, "platforms": status.platforms},
+        })
 
     asyncio.create_task(_run())
     return status
@@ -348,7 +451,15 @@ async def demo_workspace(slug: str, platform: str = "web") -> BuildStatus:
             status.message = f"Error: {e}"
 
         _track_build("demo", slug, status.status == "success", status.elapsed_seconds)
-        await _fire_webhook(status)
+        await _send_webhook_event(status.webhook_url, {
+            "build_id": status.build_id,
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "event": "complete",
+            "phase": "complete",
+            "message": status.message,
+            "elapsed_seconds": status.elapsed_seconds,
+            "detail": {"status": status.status, "slug": status.slug, "platforms": status.platforms},
+        })
 
     asyncio.create_task(_run())
     return status
@@ -423,7 +534,15 @@ async def build_workspace_platform(slug: str, platform: str = "web") -> BuildSta
             status.message = f"Error: {e}"
 
         _track_build("build", slug, status.status == "success", status.elapsed_seconds)
-        await _fire_webhook(status)
+        await _send_webhook_event(status.webhook_url, {
+            "build_id": status.build_id,
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "event": "complete",
+            "phase": "complete",
+            "message": status.message,
+            "elapsed_seconds": status.elapsed_seconds,
+            "detail": {"status": status.status, "slug": status.slug, "platforms": status.platforms},
+        })
 
     asyncio.create_task(_run())
     return status
@@ -472,7 +591,15 @@ async def appraise_workspace(slug: str) -> BuildStatus:
             status.message = f"Error: {e}"
 
         _track_build("appraise", slug, status.status == "success", status.elapsed_seconds)
-        await _fire_webhook(status)
+        await _send_webhook_event(status.webhook_url, {
+            "build_id": status.build_id,
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "event": "complete",
+            "phase": "complete",
+            "message": status.message,
+            "elapsed_seconds": status.elapsed_seconds,
+            "detail": {"status": status.status, "slug": status.slug, "platforms": status.platforms},
+        })
 
     asyncio.create_task(_run())
     return status

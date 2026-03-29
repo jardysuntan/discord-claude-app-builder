@@ -78,7 +78,7 @@ curl http://localhost:8100/api/v1/builds/abc123 \
 ```
 
 Status values: `queued`, `building`, `success`, `failed`
-Phase values: `scaffolding`, `schema`, `building`, `fixing`, `demoing`, `complete`
+Phase values: `scaffolding`, `schema_design`, `schema_deploy`, `patching_credentials`, `building_android`, `building_web`, `building_ios`, `fixing`, `demo_android`, `demo_web`, `demo_ios`, `saving`, `deploying`, `complete`
 
 ### Workspaces
 
@@ -344,29 +344,108 @@ curl http://localhost:8100/api/v1/analytics \
 }
 ```
 
-### Webhooks
+### Webhooks (Real-Time Build Events)
 
-All async operations (`buildapp`, `prompt`, `demo`, `build`) accept an optional `webhook_url` field. When the operation completes (success or failure), a POST is sent to that URL with the full build status payload:
+All async operations (`buildapp`, `prompt`, `demo`, `build`, `appraise`) accept an optional `webhook_url` field. For `buildapp`, **real-time events** are POSTed to that URL throughout the entire build lifecycle — not just at completion. Other operations send a single `complete` event when done.
+
+#### Event Envelope
+
+Every webhook POST sends this JSON body:
 
 ```json
 {
   "build_id": "abc123",
-  "status": "success",
-  "slug": "todolist",
-  "phase": "complete",
-  "message": "Build complete",
-  "elapsed_seconds": 95,
-  "platforms": {}
+  "timestamp": "2026-03-28T21:15:00Z",
+  "event": "progress",
+  "phase": "building_android",
+  "message": "Claude writing code for Android target...",
+  "elapsed_seconds": 45,
+  "detail": {}
 }
 ```
 
-Example:
+#### Event Types
+
+| event | When | detail |
+|-------|------|--------|
+| `started` | Build request accepted | `{"app_name": "...", "description": "..."}` |
+| `progress` | Phase change or meaningful update | `{}` |
+| `issue` | Non-fatal problem (build continues) | `{"error": "..."}` |
+| `platform_complete` | One platform finished building | `{"platform": "android\|web\|ios", "success": true}` |
+| `demo_ready` | Demo URL available | `{"platform": "web", "url": "https://..."}` |
+| `complete` | Build finished (success or fail) | `{"status": "success\|failed", "slug": "...", "platforms": {...}}` |
+| `error` | Fatal unrecoverable error | `{"error": "...", "recoverable": false}` |
+
+#### Phase Values
+
+| phase | Description |
+|-------|-------------|
+| `scaffolding` | Creating project directory and template |
+| `schema_design` | Claude designing database schema |
+| `schema_deploy` | Creating Supabase tables |
+| `patching_credentials` | Injecting Supabase credentials |
+| `building_android` | Claude writing/fixing Android code |
+| `building_web` | Building/fixing web (wasmJs) target |
+| `building_ios` | Building/fixing iOS target |
+| `fixing` | Auto-fix loop running |
+| `demo_android` | Launching Android emulator demo |
+| `demo_web` | Starting web server |
+| `demo_ios` | Launching iOS simulator demo |
+| `saving` | Git commit / checkpoint |
+| `deploying` | Deploying to Cloudflare / hosting |
+| `complete` | All done |
+
+#### Example: Build with Webhooks
+
 ```bash
-curl -X POST http://localhost:8100/api/v1/workspaces/todolist/prompt \
+# 1. Start a build with a webhook endpoint
+curl -X POST http://localhost:8100/api/v1/buildapp \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"prompt": "Add dark mode", "webhook_url": "https://example.com/hook"}'
+  -d '{
+    "description": "a todo list app",
+    "app_name": "TodoList",
+    "webhook_url": "https://example.com/webhook"
+  }'
 ```
+
+Your endpoint will receive a stream of POSTs:
+
+```
+→ {"event": "started",           "phase": "scaffolding",      "elapsed_seconds": 0}
+→ {"event": "progress",          "phase": "scaffolding",      "elapsed_seconds": 3}
+→ {"event": "progress",          "phase": "schema_deploy",    "elapsed_seconds": 18}
+→ {"event": "progress",          "phase": "building_android", "elapsed_seconds": 25}
+→ {"event": "issue",             "phase": "fixing",           "elapsed_seconds": 60}
+→ {"event": "platform_complete", "phase": "building_android", "elapsed_seconds": 135}
+→ {"event": "progress",          "phase": "building_web",     "elapsed_seconds": 140}
+→ {"event": "platform_complete", "phase": "building_web",     "elapsed_seconds": 270}
+→ {"event": "demo_ready",        "phase": "demo_web",         "elapsed_seconds": 280}
+→ {"event": "complete",          "phase": "complete",         "elapsed_seconds": 290}
+```
+
+#### Example: Minimal Webhook Receiver (Python)
+
+```python
+from flask import Flask, request
+
+app = Flask(__name__)
+
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    event = request.json
+    print(f"[{event['elapsed_seconds']}s] {event['event']}: {event['message']}")
+    return "ok"
+
+app.run(port=9999)
+```
+
+#### Design Notes
+
+- **Fire-and-forget** — Webhook delivery never blocks or slows the build. If your endpoint is down, events are skipped (not retried).
+- **5-second timeout** — Each webhook POST times out after 5s to prevent resource buildup.
+- **Polling as fallback** — `GET /builds/{build_id}` is always available. Use webhooks for real-time UX, polling as backup.
+- **No signing (yet)** — Events are not signed. Validate by checking `build_id` against builds you initiated.
 
 ### Health
 

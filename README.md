@@ -2,6 +2,8 @@
 
 A Discord bot that turns chat messages into cross-platform apps. Describe what you want, and it builds it — Android, iOS, and Web — all from your phone.
 
+**Integrating your own bot?** See the full **[API Documentation](API.md)** — includes auth, every endpoint, real-time webhook events, and code examples.
+
 <table>
   <tr>
     <td align="center">
