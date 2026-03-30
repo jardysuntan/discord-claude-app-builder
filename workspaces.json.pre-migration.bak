@@ -1,0 +1,171 @@
+{
+  "habit-tracker": {
+    "path": "/Users/jaredtanpersonal/Projects/discord-claude-bot-apps/HabitTracker2",
+    "owner_id": 243611843745021952,
+    "collaborators": [
+      {
+        "name": "Jardy",
+        "email": "jaredsuntan@gmail.com",
+        "user_id": 1478945913668899013
+      }
+    ],
+    "category": "app",
+    "active": true
+  },
+  "content-creation-helper": {
+    "path": "/Users/jaredtanpersonal/Projects/discord-claude-bot-apps/HelperContent2",
+    "owner_id": 243611843745021952,
+    "category": "app",
+    "active": true
+  },
+  "photo-sorter": {
+    "path": "/Users/jaredtanpersonal/Projects/discord-claude-bot-apps/WantSortsAll",
+    "owner_id": 243611843745021952,
+    "category": "app",
+    "active": true
+  },
+  "appdashboard": {
+    "path": "/Users/jaredtanpersonal/Projects/discord-claude-bot-apps/AppDashboard",
+    "owner_id": 243611843745021952,
+    "category": "app",
+    "active": true
+  },
+  "haven": {
+    "path": "/Users/jaredtanpersonal/Projects/discord-claude-bot-apps/Haven",
+    "owner_id": 243611843745021952,
+    "category": "app",
+    "active": true
+  },
+  "yangzihesobachmobile": {
+    "path": "/Users/jaredtanpersonal/Projects/discord-claude-bot-apps/YangzihesobachMobile",
+    "owner_id": 243611843745021952,
+    "collaborators": [
+      {
+        "name": "Yangzi",
+        "email": "yangzihe12@gmail.com",
+        "user_id": null
+      }
+    ],
+    "category": "app",
+    "active": true,
+    "protected": true,
+    "supabase_schema": "app_yangzihesobachmobile"
+  },
+  "gigmarketplacemusicians": {
+    "path": "/Users/jaredtanpersonal/Projects/discord-claude-bot-apps/GigMarketplaceMusicians",
+    "owner_id": 243611843745021952,
+    "category": "app",
+    "active": true
+  },
+  "doodleclonebut": {
+    "path": "/Users/jaredtanpersonal/Projects/discord-claude-bot-apps/users/1478945913668899013/DoodleCloneBut",
+    "owner_id": 1478945913668899013,
+    "category": "app",
+    "active": true
+  },
+  "poolmaintenance": {
+    "path": "/Users/jaredtanpersonal/Projects/discord-claude-bot-apps/users/1479164612040720504/poolmaintenance",
+    "owner_id": 1479164612040720504,
+    "category": "app",
+    "active": true
+  },
+  "nycnewrestaurants": {
+    "path": "/Users/jaredtanpersonal/Projects/discord-claude-bot-apps/users/1478945913668899013/nycnewrestaurants",
+    "owner_id": 1478945913668899013,
+    "category": "app",
+    "active": true
+  },
+  "listeningguru": {
+    "path": "/Users/jaredtanpersonal/Projects/discord-claude-bot-apps/users/1478945913668899013/ListeningGuru",
+    "owner_id": 1478945913668899013,
+    "category": "app",
+    "active": true
+  },
+  "golf-leaderboard": {
+    "path": "/Users/jaredtanpersonal/Projects/discord-claude-bot-apps/users/1478945913668899013/golfleaderaboard",
+    "owner_id": 1478945913668899013,
+    "category": "app",
+    "active": true
+  },
+  "presently": {
+    "path": "/Users/jaredtanpersonal/Projects/discord-claude-bot-apps/users/1481097240989794359/presently",
+    "owner_id": 1481097240989794359,
+    "category": "app",
+    "active": true
+  },
+  "pomodorotimer": {
+    "path": "/Users/jaredtanpersonal/Projects/discord-claude-bot-apps/users/1478945913668899013/pomodorotimer",
+    "owner_id": 1478945913668899013,
+    "category": "app",
+    "active": true
+  },
+  "tabidachi": {
+    "path": "/Users/jaredtanpersonal/Projects/discord-claude-bot-apps/tabidachi",
+    "owner_id": 243611843745021952,
+    "category": "app",
+    "active": true
+  },
+  "puppygrowth": {
+    "path": "/Users/jaredtanpersonal/Projects/discord-claude-bot-apps/puppygrowth",
+    "owner_id": 243611843745021952,
+    "category": "experiment",
+    "active": false
+  },
+  "novalifepuppy": {
+    "path": "/Users/jaredtanpersonal/Projects/discord-claude-bot-apps/novalifepuppy",
+    "owner_id": 243611843745021952,
+    "category": "app",
+    "active": true,
+    "protected": true,
+    "supabase_schema": "app_novalifepuppy"
+  },
+  "lifedashboard": {
+    "path": "/Users/jaredtanpersonal/Projects/discord-claude-bot-apps/lifedashboard",
+    "owner_id": 243611843745021952,
+    "category": "app",
+    "active": true
+  },
+  "jabluehq": {
+    "path": "/Users/jaredtanpersonal/Projects/discord-claude-bot-apps/jabluehq",
+    "owner_id": 243611843745021952,
+    "category": "app",
+    "active": true,
+    "protected": true,
+    "supabase_schema": "app_jabluehq"
+  },
+  "photoreviewerphoto": {
+    "path": "/Users/jaredtanpersonal/Projects/discord-claude-bot-apps/photoreviewerphoto",
+    "owner_id": 243611843745021952,
+    "category": "experiment",
+    "active": false
+  },
+  "photoreviewerkmpbased": {
+    "path": "/Users/jaredtanpersonal/Projects/discord-claude-bot-apps/photoreviewerkmpbased",
+    "owner_id": 243611843745021952,
+    "category": "app",
+    "active": true,
+    "protected": true,
+    "supabase_schema": "app_photoreviewerkmpbased"
+  },
+  "healthbrain": {
+    "path": "/Users/jaredtanpersonal/Projects/discord-claude-bot-apps/healthbrain",
+    "owner_id": 243611843745021952,
+    "category": "app",
+    "supabase_schema": "app_healthbrain"
+  },
+  "smoketestcounter9": {
+    "path": "/Users/jaredtanpersonal/Projects/discord-claude-bot-apps/smoketestcounter9",
+    "owner_id": 243611843745021952,
+    "category": "smoketest"
+  },
+  "smoketestmap3": {
+    "path": "/Users/jaredtanpersonal/Projects/discord-claude-bot-apps/smoketestmap3",
+    "owner_id": 243611843745021952,
+    "category": "smoketest"
+  },
+  "smoketestvideo3": {
+    "path": "/Users/jaredtanpersonal/Projects/discord-claude-bot-apps/smoketestvideo3",
+    "owner_id": 243611843745021952,
+    "category": "smoketest"
+  }
+}

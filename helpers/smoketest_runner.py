@@ -270,13 +270,16 @@ async def _run_scenario(
         try:
             import httpx
             async with httpx.AsyncClient(timeout=15, follow_redirects=True) as hc:
-                # CF Pages can take a few seconds to propagate — retry up to 3 times
-                for attempt in range(3):
+                # CF Pages DNS/edge propagation can take 15-60s after
+                # wrangler reports success — use exponential backoff.
+                await asyncio.sleep(10)  # initial propagation grace period
+                delays = [5, 10, 15, 20]  # back off across ~50s total
+                for attempt, delay in enumerate(delays):
                     resp = await hc.head(url)
                     if resp.status_code == 200:
                         deploy_ok = True
                         break
-                    await asyncio.sleep(3)
+                    await asyncio.sleep(delay)
                 if not deploy_ok:
                     deploy_detail = f"URL {url} returned {resp.status_code}"
         except Exception as exc:

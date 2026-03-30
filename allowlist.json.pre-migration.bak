@@ -1,0 +1,48 @@
+{
+    "243611843745021952": {
+        "role": "admin",
+        "display_name": "Owner",
+        "daily_cap_usd": 50.0,
+        "email": "jared.e.tan@gmail.com"
+    },
+    "1478945913668899013": {
+        "role": "user",
+        "display_name": "Jardy",
+        "daily_cap_usd": 10.0,
+        "email": "jaredsuntan@gmail.com"
+    },
+    "1479164612040720504": {
+        "role": "user",
+        "display_name": "Jedster",
+        "daily_cap_usd": 10.0,
+        "email": "jedtan@yahoo.com"
+    },
+    "0": {
+        "pending_invites": [
+            "jamie.y.tan@gmail.com",
+            "kailiteng@hotmail.com",
+            "jocelyntan@cox.net",
+            "Cherise.woo@gmail.com",
+            "anthonc9@uci.edu",
+            "yangzihe12@gmail.com",
+            "syjkim35@gmail.com",
+            "johnlee907@gmail.com"
+        ]
+    },
+    "1481097240989794359": {
+        "role": "user",
+        "display_name": "kka&c",
+        "daily_cap_usd": 10.0
+    },
+    "491027024576774144": {
+        "role": "user",
+        "display_name": "jonboy",
+        "daily_cap_usd": 10.0
+    },
+    "1484031871586402364": {
+        "role": "admin",
+        "display_name": "Jablue",
+        "daily_cap_usd": 50.0,
+        "email": "jablue@aibert-prime"
+    }
+}
