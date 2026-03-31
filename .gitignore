@@ -13,6 +13,8 @@ venv/
 keys/
 allowlist.json
 .api-token
+.credential-key
+accounts.json
 
 # Cloudflare
 .wrangler/
