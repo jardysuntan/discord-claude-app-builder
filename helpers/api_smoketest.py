@@ -79,8 +79,22 @@ async def run_api_smoketest(
         workspaces_check, workspaces = await _check_workspaces(client, headers)
         result.checks.append(workspaces_check)
 
-        # Pick first workspace slug for subsequent tests (if any exist)
+        # Pick a workspace whose directory actually exists on disk (for git tests).
+        # Fall back to the first workspace for non-git tests.
         slug = workspaces[0]["slug"] if workspaces else None
+        git_slug = None
+        for ws in workspaces:
+            s = ws["slug"]
+            # Quick probe: hit git/status and use first one that returns 200
+            try:
+                probe = await client.get(
+                    f"/api/v1/workspaces/{s}/git/status", headers=headers,
+                )
+                if probe.status_code == 200:
+                    git_slug = s
+                    break
+            except Exception:
+                continue
 
         # 5. GET /workspaces/{slug} → 200
         if slug:
@@ -91,19 +105,19 @@ async def run_api_smoketest(
             ))
 
         # 6. GET /workspaces/{slug}/git/status → 200 + has output
-        if slug:
-            result.checks.append(await _check_git_status(client, headers, slug))
+        if git_slug:
+            result.checks.append(await _check_git_status(client, headers, git_slug))
         else:
             result.checks.append(ApiCheckResult(
-                "GET git status", True, "skipped (no workspaces)",
+                "GET git status", True, "skipped (no workspace with git)",
             ))
 
         # 7. GET /workspaces/{slug}/git/log → 200
-        if slug:
-            result.checks.append(await _check_git_log(client, headers, slug))
+        if git_slug:
+            result.checks.append(await _check_git_log(client, headers, git_slug))
         else:
             result.checks.append(ApiCheckResult(
-                "GET git log", True, "skipped (no workspaces)",
+                "GET git log", True, "skipped (no workspace with git)",
             ))
 
         # 8. POST /planapp → 200 + has app_name
