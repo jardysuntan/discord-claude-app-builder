@@ -16,6 +16,20 @@ import config
 _TIMEOUT = aiohttp.ClientTimeout(total=30)
 
 
+def _qualify_functions(sql: str, schema: str) -> str:
+    """Auto-prefix unqualified CREATE [OR REPLACE] FUNCTION with the schema name.
+
+    Catches Claude-generated SQL that forgets schema qualification.
+    Only modifies functions whose name has no dot (i.e. not already qualified).
+    """
+    return re.sub(
+        r"\b(CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+)(?![\w\"]+\.)(\w+|\"[^\"]+\")",
+        rf"\1{schema}.\2",
+        sql,
+        flags=re.IGNORECASE,
+    )
+
+
 async def run_sql(sql: str, schema: Optional[str] = None) -> tuple[bool, str]:
     """Execute SQL via the Supabase Management API.
 
@@ -23,6 +37,7 @@ async def run_sql(sql: str, schema: Optional[str] = None) -> tuple[bool, str]:
     Returns (success, error_message_or_empty).
     """
     if schema:
+        sql = _qualify_functions(sql, schema)
         sql = f"SET search_path TO {schema}, public;\n{sql}"
     url = f"https://api.supabase.com/v1/projects/{config.SUPABASE_PROJECT_REF}/database/query"
     headers = {
@@ -212,6 +227,22 @@ def detect_changed_sql(before: dict[str, float], workspace_path: str) -> list[st
     return changed
 
 
+def _extract_migrations(sql: str) -> str:
+    """Extract ALTER TABLE and CREATE TABLE IF NOT EXISTS statements for pre-flight."""
+    lines = []
+    for m in re.finditer(
+        r"(ALTER\s+TABLE\s+\S+\s+ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+[^;]+;)",
+        sql, re.IGNORECASE | re.DOTALL,
+    ):
+        lines.append(m.group(1))
+    for m in re.finditer(
+        r"(CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+[^;]+\);)",
+        sql, re.IGNORECASE | re.DOTALL,
+    ):
+        lines.append(m.group(1))
+    return "\n".join(lines)
+
+
 async def sync_sql_files(changed_files: list[str], schema: Optional[str] = None) -> tuple[bool, str]:
     """Execute changed SQL files against Supabase sequentially.
 
@@ -248,6 +279,20 @@ async def sync_sql_files(changed_files: list[str], schema: Optional[str] = None)
         ok, err = await run_sql(sql, schema=schema)
         if ok:
             results.append(f"✅ {name}")
+        elif "does not exist" in (err or ""):
+            # Column/table missing — run ALTER TABLE migrations first, then retry
+            migrations = _extract_migrations(sql)
+            if migrations:
+                await run_sql(migrations, schema=schema)
+                ok2, err2 = await run_sql(sql, schema=schema)
+                if ok2:
+                    results.append(f"✅ {name} (after migrations)")
+                else:
+                    results.append(f"❌ {name}: {err2}")
+                    all_ok = False
+            else:
+                results.append(f"❌ {name}: {err}")
+                all_ok = False
         else:
             results.append(f"❌ {name}: {err}")
             all_ok = False

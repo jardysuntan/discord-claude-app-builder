@@ -88,6 +88,7 @@ Rules:
   version text, "lastUpdated" timestamptz DEFAULT now(), "joinCode" text, "organizerCode" text.
 - Add a get_app_config() RPC that returns all rows from every table as a single
   JSON object via json_build_object + (SELECT json_agg(...) FROM <table>).
+{func_qualify_instruction}
 - Add permissive RLS: ALTER TABLE <t> ENABLE ROW LEVEL SECURITY;
   CREATE POLICY "public_access" ON <t> FOR ALL USING (true) WITH CHECK (true);
   for every table.
@@ -134,6 +135,7 @@ Write complete, working code. No TODOs or placeholders."""
             schema_note = (
                 f"\n- **Database schema:** `{db_schema}` (all tables live here, NOT in public)\n"
                 f"- When running SQL, always start with: `SET search_path TO {db_schema}, public;`\n"
+                f"- **IMPORTANT:** All HTTP requests to Supabase REST/RPC endpoints MUST include the header `Content-Profile: {db_schema}` so PostgREST resolves the correct schema.\n"
             )
         base += f"""
 
@@ -278,12 +280,15 @@ async def handle_buildapp(
         if app_schema:
             schema_section = f"This app uses Postgres schema: {app_schema}. All tables must be created in this schema."
             search_path_instruction = f"Start the SQL with: SET search_path TO {app_schema}, public;"
+            func_qualify_instruction = f"  The function MUST be schema-qualified: CREATE OR REPLACE FUNCTION {app_schema}.get_app_config()"
         else:
             schema_section = ""
             search_path_instruction = "Tables go in the public schema (default)"
+            func_qualify_instruction = ""
         schema_prompt = SCHEMA_PROMPT.format(
             description=description, app_name=app_name, data_section=data_section,
             schema_section=schema_section, search_path_instruction=search_path_instruction,
+            func_qualify_instruction=func_qualify_instruction,
         )
         schema_result = await claude.run(schema_prompt, slug, ws_path)
         schema_sql = extract_sql(schema_result.stdout)

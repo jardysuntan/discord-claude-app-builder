@@ -130,9 +130,9 @@ async def on_message(message: discord.Message):
     if uid in ctx.awaiting_csv_upload and message.attachments:
         att = next((a for a in message.attachments if a.filename.lower().endswith(".csv")), None)
         if att:
-            ws_key, ws_path = ctx.awaiting_csv_upload.pop(uid)
+            ws_key, ws_path, ws_schema = ctx.awaiting_csv_upload.pop(uid)
             from handlers.data_commands import _process_csv_import
-            await _process_csv_import(ctx, message.channel, ws_path, att)
+            await _process_csv_import(ctx, message.channel, ws_path, att, schema=ws_schema)
             return
 
     text = message.content.strip()
@@ -140,6 +140,18 @@ async def on_message(message: discord.Message):
         att.filename.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"))
         for att in message.attachments
     )
+
+    # Read text file attachments and append their content to the prompt
+    _TEXT_EXTENSIONS = (".txt", ".md", ".csv", ".json", ".sql", ".kt", ".swift", ".xml", ".yaml", ".yml", ".toml")
+    for att in message.attachments:
+        if att.filename.lower().endswith(_TEXT_EXTENSIONS) and att.size <= 500_000:
+            try:
+                file_bytes = await att.read()
+                file_text = file_bytes.decode("utf-8", errors="replace")
+                text = f"{text}\n\n--- {att.filename} ---\n{file_text}".strip()
+            except Exception:
+                pass
+
     if not text and not has_images:
         return
 

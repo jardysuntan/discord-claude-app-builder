@@ -172,13 +172,15 @@ async def handle_data(ctx: BotContext, cmd: Command, channel, user_id: int, is_a
         await ctx.send(channel, "⚠️ No workspace selected. Use `/ls` to pick one.")
         return
 
+    ws_schema = ctx.registry.get_schema(ws_key)
+
     sub = cmd.sub
     if sub == "export":
-        await _handle_export(ctx, channel, ws_path)
+        await _handle_export(ctx, channel, ws_path, schema=ws_schema)
     elif sub == "template":
         await _handle_template(ctx, channel, ws_path)
     elif sub == "import":
-        await _handle_import(ctx, cmd, channel, user_id, ws_key, ws_path)
+        await _handle_import(ctx, cmd, channel, user_id, ws_key, ws_path, schema=ws_schema)
     else:
         await ctx.send(
             channel,
@@ -189,7 +191,7 @@ async def handle_data(ctx: BotContext, cmd: Command, channel, user_id: int, is_a
         )
 
 
-async def _handle_export(ctx: BotContext, channel, ws_path: str) -> None:
+async def _handle_export(ctx: BotContext, channel, ws_path: str, schema: str | None = None) -> None:
     schema_sql = _find_schema_sql(ws_path)
     if not schema_sql:
         await ctx.send(channel, "⚠️ No `schema.sql` found in this workspace's `supabase/` directory.")
@@ -208,7 +210,7 @@ async def _handle_export(ctx: BotContext, channel, ws_path: str) -> None:
     for i, (table_name, tinfo) in enumerate(tables.items(), 1):
         try:
             ok, result = await asyncio.wait_for(
-                query_sql(f'SELECT * FROM "{table_name}" LIMIT {_EXPORT_ROW_LIMIT};'),
+                query_sql(f'SELECT * FROM "{table_name}" LIMIT {_EXPORT_ROW_LIMIT};', schema=schema),
                 timeout=_EXPORT_QUERY_TIMEOUT,
             )
         except asyncio.TimeoutError:
@@ -311,17 +313,17 @@ async def _handle_template(ctx: BotContext, channel, ws_path: str) -> None:
     )
 
 
-async def _handle_import(ctx: BotContext, cmd: Command, channel, user_id: int, ws_key: str, ws_path: str, attachment: discord.Attachment | None = None) -> None:
+async def _handle_import(ctx: BotContext, cmd: Command, channel, user_id: int, ws_key: str, ws_path: str, schema: str | None = None, attachment: discord.Attachment | None = None) -> None:
     if attachment is None:
         # No attachment — prompt for upload
-        ctx.awaiting_csv_upload[user_id] = (ws_key, ws_path)
+        ctx.awaiting_csv_upload[user_id] = (ws_key, ws_path, schema)
         await ctx.send(channel, "📎 Upload a `.csv` file and I'll import it into your database.\nName the file after the table (e.g. `venues.csv` → `venues` table).")
         return
 
-    await _process_csv_import(ctx, channel, ws_path, attachment)
+    await _process_csv_import(ctx, channel, ws_path, attachment, schema=schema)
 
 
-async def _process_csv_import(ctx: BotContext, channel, ws_path: str, attachment: discord.Attachment) -> None:
+async def _process_csv_import(ctx: BotContext, channel, ws_path: str, attachment: discord.Attachment, schema: str | None = None) -> None:
     """Read a CSV attachment and insert rows into the matching table."""
     # Infer table name from filename
     filename = attachment.filename
@@ -374,7 +376,7 @@ async def _process_csv_import(ctx: BotContext, channel, ws_path: str, attachment
         batch = values_list[i : i + batch_size]
         sql = f'INSERT INTO "{table_name}" ({col_list}) VALUES\n' + ",\n".join(batch) + ";"
         sql = patch_idempotent(sql)
-        ok, err = await run_sql(sql)
+        ok, err = await run_sql(sql, schema=schema)
         if ok:
             total_imported += len(batch)
         else:
