@@ -1251,6 +1251,24 @@ def _ensure_asset_catalog_in_pbxproj(pbxproj_path: Path) -> bool:
 def preflight_fix_ios(workspace_path: str) -> list[str]:
     """Auto-fix common TestFlight validation issues. Returns list of fixes applied."""
     fixes = []
+
+    # ── 0. Ensure Gradle has enough heap for Kotlin/Native linking ────────
+    gradle_props = Path(workspace_path) / "gradle.properties"
+    if gradle_props.exists():
+        text = gradle_props.read_text()
+        m = re.search(r'org\.gradle\.jvmargs\s*=\s*-Xmx(\d+)([gGmM])', text)
+        if m:
+            size, unit = int(m.group(1)), m.group(2).lower()
+            heap_mb = size * 1024 if unit == 'g' else size
+            if heap_mb < 4096:
+                text = re.sub(
+                    r'org\.gradle\.jvmargs\s*=\s*-Xmx\d+[gGmM]',
+                    'org.gradle.jvmargs=-Xmx4g',
+                    text,
+                )
+                gradle_props.write_text(text)
+                fixes.append("Increased Gradle heap to 4GB (Kotlin/Native needs it)")
+
     ios_dir = Path(workspace_path) / "iosApp"
     if not ios_dir.exists():
         return fixes
@@ -1371,11 +1389,11 @@ async def export_ipa(archive_path: str, workspace_path: str, team_id: str) -> tu
         '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"'
         ' "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
         '<plist version="1.0">\n<dict>\n'
-        '    <key>method</key>\n    <string>app-store</string>\n'
+        '    <key>method</key>\n    <string>app-store-connect</string>\n'
         f'    <key>teamID</key>\n    <string>{team_id}</string>\n'
         '    <key>signingStyle</key>\n    <string>automatic</string>\n'
         '    <key>uploadSymbols</key>\n    <true/>\n'
-        '    <key>destination</key>\n    <string>export</string>\n'
+        '    <key>destination</key>\n    <string>upload</string>\n'
         '</dict>\n</plist>\n'
     )
 
