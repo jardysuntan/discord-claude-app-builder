@@ -183,6 +183,16 @@ async def handle_prompt(
             )
     await ctx.send(channel, result.stdout or "(empty)")
 
+    # Show context window usage
+    if result.context_tokens > 0:
+        threshold = config.SESSION_CONTEXT_ROTATION_TOKENS
+        pct = int(result.context_tokens / threshold * 100)
+        bar_filled = min(pct // 10, 10)
+        bar = "█" * bar_filled + "░" * (10 - bar_filled)
+        tokens_k = result.context_tokens / 1000
+        threshold_k = threshold / 1000
+        await ctx.send(channel, f"-# 🧠 Context: {bar} {tokens_k:.0f}k / {threshold_k:.0f}k tokens ({pct}%)")
+
     # Auto-sync changed SQL files to Supabase (with per-app schema isolation)
     if sql_before and config.SUPABASE_PROJECT_REF and config.SUPABASE_MANAGEMENT_KEY:
         changed_sql = detect_changed_sql(sql_before, ws_path)
