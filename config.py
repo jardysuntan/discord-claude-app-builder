@@ -104,7 +104,7 @@ SMOKETEST_CHANNEL_ID: int = int(os.getenv("SMOKETEST_CHANNEL_ID", "0"))
 MAX_TOTAL_INVOCATIONS: int = int(os.getenv("MAX_TOTAL_INVOCATIONS", "20"))
 
 # ── Session Rotation ─────────────────────────────────────────────────────────
-SESSION_COST_ROTATION_USD: float = float(os.getenv("SESSION_COST_ROTATION_USD", "5.0"))
+SESSION_CONTEXT_ROTATION_TOKENS: int = int(os.getenv("SESSION_CONTEXT_ROTATION_TOKENS", "200000"))
 SESSION_SUMMARIES_DIR: str = os.getenv("SESSION_SUMMARIES_DIR", "./session_summaries")
 AUTO_FIX_ON_FAILURE: bool = os.getenv("AUTO_FIX_ON_FAILURE", "1") == "1"
 

@@ -23,6 +23,7 @@ class ClaudeResult:
     exit_code: int
     session_id: Optional[str] = None
     total_cost_usd: float = 0.0
+    context_tokens: int = 0  # total input context (input + cache_creation + cache_read)
 
 
 def _resolve_claude_bin() -> str:
@@ -148,17 +149,17 @@ def _progress_from_event(event: dict, state: Optional[dict] = None) -> Optional[
 
 class ClaudeRunner:
     _SESSIONS_FILE = Path(config.WORKSPACES_PATH).parent / "claude_sessions.json"
-    _SESSION_COSTS_FILE = Path(config.WORKSPACES_PATH).parent / "claude_session_costs.json"
+    _SESSION_TOKENS_FILE = Path(config.WORKSPACES_PATH).parent / "claude_session_tokens.json"
     _SUMMARIES_DIR = Path(config.SESSION_SUMMARIES_DIR)
 
     def __init__(self):
         self._sessions: dict[str, str] = {}
-        self._session_costs: dict[str, float] = {}  # workspace → cumulative cost this session
+        self._session_tokens: dict[str, int] = {}  # workspace → last known context size in tokens
         self._run_durations: dict[str, list[float]] = {}  # workspace → last N durations
         self._active_procs: dict[str, asyncio.subprocess.Process] = {}
         self._claude_bin = _resolve_claude_bin()
         self._load_sessions()
-        self._load_session_costs()
+        self._load_session_tokens()
         self._SUMMARIES_DIR.mkdir(parents=True, exist_ok=True)
         print(f"  Claude binary:   {self._claude_bin}")
         print(f"  Persisted sessions: {len(self._sessions)}")
@@ -175,26 +176,26 @@ class ClaudeRunner:
         with open(self._SESSIONS_FILE, "w") as f:
             json.dump(self._sessions, f, indent=2)
 
-    def _load_session_costs(self):
-        if self._SESSION_COSTS_FILE.exists():
+    def _load_session_tokens(self):
+        if self._SESSION_TOKENS_FILE.exists():
             try:
-                with open(self._SESSION_COSTS_FILE) as f:
-                    self._session_costs = json.load(f)
+                with open(self._SESSION_TOKENS_FILE) as f:
+                    self._session_tokens = {k: int(v) for k, v in json.load(f).items()}
             except (json.JSONDecodeError, ValueError):
-                self._session_costs = {}
+                self._session_tokens = {}
 
-    def _save_session_costs(self):
-        with open(self._SESSION_COSTS_FILE, "w") as f:
-            json.dump(self._session_costs, f, indent=2)
+    def _save_session_tokens(self):
+        with open(self._SESSION_TOKENS_FILE, "w") as f:
+            json.dump(self._session_tokens, f, indent=2)
 
-    def _record_session_cost(self, workspace: str, cost: float):
-        """Add cost to the running session total."""
-        self._session_costs[workspace] = self._session_costs.get(workspace, 0.0) + cost
-        self._save_session_costs()
+    def _record_context_tokens(self, workspace: str, tokens: int):
+        """Update the last known context size for this workspace session."""
+        self._session_tokens[workspace] = tokens
+        self._save_session_tokens()
 
     def _session_needs_rotation(self, workspace: str) -> bool:
-        """Check if session cost exceeds the rotation threshold."""
-        return self._session_costs.get(workspace, 0.0) >= config.SESSION_COST_ROTATION_USD
+        """Check if session context size exceeds the rotation threshold."""
+        return self._session_tokens.get(workspace, 0) >= config.SESSION_CONTEXT_ROTATION_TOKENS
 
     def _get_summary_path(self, workspace: str) -> Path:
         return self._SUMMARIES_DIR / f"{workspace}.md"
@@ -236,8 +237,8 @@ class ClaudeRunner:
     async def _rotate_session(self, workspace: str, workspace_path: str,
                               on_progress: Optional[Callable[[str], Awaitable[None]]] = None):
         """Generate handoff summary, clear session, reset cost counter."""
-        cost = self._session_costs.get(workspace, 0.0)
-        print(f"[claude] Rotating session for {workspace} (accumulated ${cost:.2f})")
+        tokens = self._session_tokens.get(workspace, 0)
+        print(f"[claude] Rotating session for {workspace} (context: {tokens:,} tokens)")
 
         if on_progress:
             try:
@@ -263,10 +264,10 @@ class ClaudeRunner:
         else:
             print("[claude] No handoff summary generated — rotating anyway")
 
-        # Clear session and reset cost
+        # Clear session and reset token counter
         self.clear_session(workspace)
-        self._session_costs.pop(workspace, None)
-        self._save_session_costs()
+        self._session_tokens.pop(workspace, None)
+        self._save_session_tokens()
 
         if on_progress:
             try:
@@ -407,6 +408,7 @@ class ClaudeRunner:
             result_text = ""
             result_session_id = None
             result_cost_usd = 0.0
+            result_context_tokens = 0
             stderr_chunks = []
             last_progress_time = time.time()
             process_done = False
@@ -502,7 +504,14 @@ class ClaudeRunner:
                     cost = event.get("total_cost_usd", 0) or 0
                     result_cost_usd = float(cost)
                     duration = event.get("duration_ms", 0) / 1000
-                    print(f"[claude] Result: error={is_error} cost=${cost:.4f} duration={duration:.1f}s")
+                    # Extract context token usage
+                    usage = event.get("usage", {})
+                    result_context_tokens = (
+                        usage.get("input_tokens", 0)
+                        + usage.get("cache_creation_input_tokens", 0)
+                        + usage.get("cache_read_input_tokens", 0)
+                    )
+                    print(f"[claude] Result: error={is_error} cost=${cost:.4f} duration={duration:.1f}s context={result_context_tokens:,} tokens")
 
                 # Send progress updates to Discord
                 elif on_progress:
@@ -541,12 +550,11 @@ class ClaudeRunner:
             self._sessions[workspace_key] = result_session_id
             self._save_sessions()
 
-        # Track cumulative session cost for rotation
-        if result_cost_usd > 0:
-            self._record_session_cost(workspace_key, result_cost_usd)
-            total_session_cost = self._session_costs.get(workspace_key, 0.0)
-            threshold = config.SESSION_COST_ROTATION_USD
-            print(f"[claude] Session cost for {workspace_key}: ${total_session_cost:.2f} / ${threshold:.2f} threshold")
+        # Track context size for rotation
+        if result_context_tokens > 0:
+            self._record_context_tokens(workspace_key, result_context_tokens)
+            threshold = config.SESSION_CONTEXT_ROTATION_TOKENS
+            print(f"[claude] Context for {workspace_key}: {result_context_tokens:,} / {threshold:,} token threshold")
 
         return ClaudeResult(
             stdout=result_text,
@@ -554,4 +562,5 @@ class ClaudeRunner:
             exit_code=exit_code,
             session_id=result_session_id or session_id,
             total_cost_usd=result_cost_usd,
+            context_tokens=result_context_tokens,
         )
