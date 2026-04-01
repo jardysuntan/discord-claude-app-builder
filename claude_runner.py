@@ -148,13 +148,18 @@ def _progress_from_event(event: dict, state: Optional[dict] = None) -> Optional[
 
 class ClaudeRunner:
     _SESSIONS_FILE = Path(config.WORKSPACES_PATH).parent / "claude_sessions.json"
+    _SESSION_COSTS_FILE = Path(config.WORKSPACES_PATH).parent / "claude_session_costs.json"
+    _SUMMARIES_DIR = Path(config.SESSION_SUMMARIES_DIR)
 
     def __init__(self):
         self._sessions: dict[str, str] = {}
+        self._session_costs: dict[str, float] = {}  # workspace → cumulative cost this session
         self._run_durations: dict[str, list[float]] = {}  # workspace → last N durations
         self._active_procs: dict[str, asyncio.subprocess.Process] = {}
         self._claude_bin = _resolve_claude_bin()
         self._load_sessions()
+        self._load_session_costs()
+        self._SUMMARIES_DIR.mkdir(parents=True, exist_ok=True)
         print(f"  Claude binary:   {self._claude_bin}")
         print(f"  Persisted sessions: {len(self._sessions)}")
 
@@ -169,6 +174,105 @@ class ClaudeRunner:
     def _save_sessions(self):
         with open(self._SESSIONS_FILE, "w") as f:
             json.dump(self._sessions, f, indent=2)
+
+    def _load_session_costs(self):
+        if self._SESSION_COSTS_FILE.exists():
+            try:
+                with open(self._SESSION_COSTS_FILE) as f:
+                    self._session_costs = json.load(f)
+            except (json.JSONDecodeError, ValueError):
+                self._session_costs = {}
+
+    def _save_session_costs(self):
+        with open(self._SESSION_COSTS_FILE, "w") as f:
+            json.dump(self._session_costs, f, indent=2)
+
+    def _record_session_cost(self, workspace: str, cost: float):
+        """Add cost to the running session total."""
+        self._session_costs[workspace] = self._session_costs.get(workspace, 0.0) + cost
+        self._save_session_costs()
+
+    def _session_needs_rotation(self, workspace: str) -> bool:
+        """Check if session cost exceeds the rotation threshold."""
+        return self._session_costs.get(workspace, 0.0) >= config.SESSION_COST_ROTATION_USD
+
+    def _get_summary_path(self, workspace: str) -> Path:
+        return self._SUMMARIES_DIR / f"{workspace}.md"
+
+    def _load_handoff_summary(self, workspace: str) -> str:
+        """Load the handoff summary for a workspace, if one exists."""
+        path = self._get_summary_path(workspace)
+        if path.exists():
+            try:
+                return path.read_text().strip()
+            except Exception:
+                return ""
+        return ""
+
+    def _save_handoff_summary(self, workspace: str, summary: str):
+        """Persist a handoff summary for the next session."""
+        path = self._get_summary_path(workspace)
+        path.write_text(summary)
+
+    async def _generate_handoff_summary(self, workspace: str, workspace_path: str) -> Optional[str]:
+        """Ask Claude to summarize the current session before rotating."""
+        summary_prompt = (
+            "Summarize this session in 5-10 concise bullet points for a future AI assistant "
+            "continuing work on this project. Include:\n"
+            "- Key changes made (files, features, architecture decisions)\n"
+            "- User preferences or style choices expressed\n"
+            "- Current state (what works, what's broken, what's next)\n"
+            "- Any open threads or incomplete work\n"
+            "Keep it under 500 words. Be specific — mention file names, component names, decisions."
+        )
+        try:
+            result = await self._run_raw(summary_prompt, workspace, workspace_path)
+            if result.exit_code == 0 and result.stdout.strip():
+                return result.stdout.strip()
+        except Exception as e:
+            print(f"[claude] Handoff summary generation failed: {e}")
+        return None
+
+    async def _rotate_session(self, workspace: str, workspace_path: str,
+                              on_progress: Optional[Callable[[str], Awaitable[None]]] = None):
+        """Generate handoff summary, clear session, reset cost counter."""
+        cost = self._session_costs.get(workspace, 0.0)
+        print(f"[claude] Rotating session for {workspace} (accumulated ${cost:.2f})")
+
+        if on_progress:
+            try:
+                await on_progress("🔄 Session getting long — saving context and starting fresh...")
+            except Exception:
+                pass
+
+        # Generate summary from current session
+        summary = await self._generate_handoff_summary(workspace, workspace_path)
+        if summary:
+            # Append to any existing summary (rolling context)
+            existing = self._load_handoff_summary(workspace)
+            if existing:
+                combined = f"{existing}\n\n---\n_Previous session context:_\n{summary}"
+                # Keep only last 2 summaries worth of context
+                parts = combined.split("\n---\n")
+                if len(parts) > 2:
+                    combined = "\n---\n".join(parts[-2:])
+                self._save_handoff_summary(workspace, combined)
+            else:
+                self._save_handoff_summary(workspace, summary)
+            print(f"[claude] Handoff summary saved ({len(summary)} chars)")
+        else:
+            print("[claude] No handoff summary generated — rotating anyway")
+
+        # Clear session and reset cost
+        self.clear_session(workspace)
+        self._session_costs.pop(workspace, None)
+        self._save_session_costs()
+
+        if on_progress:
+            try:
+                await on_progress("✅ Context saved — continuing with fresh session")
+            except Exception:
+                pass
 
     def cancel(self, workspace: str) -> bool:
         """Kill the active Claude process for a workspace. Returns True if killed."""
@@ -201,6 +305,50 @@ class ClaudeRunner:
         if self._sessions.pop(workspace, None) is not None:
             self._save_sessions()
 
+    async def _run_raw(
+        self,
+        prompt: str,
+        workspace_key: str,
+        workspace_path: str,
+    ) -> ClaudeResult:
+        """Run Claude without rotation checks or progress callbacks. Used for internal calls like summary generation."""
+        cmd = [
+            self._claude_bin,
+            "--dangerously-skip-permissions",
+            "-p",
+            "--output-format", "stream-json",
+            "--verbose",
+        ]
+        session_id = self._sessions.get(workspace_key)
+        if session_id:
+            cmd += ["-r", session_id]
+        cmd.append(prompt)
+
+        env = {**os.environ, "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "4096"}
+        env.pop("CLAUDECODE", None)
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=workspace_path,
+            env=env,
+        )
+        stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=60)
+        result_text = ""
+        for line in stdout_bytes.decode("utf-8", errors="replace").splitlines():
+            try:
+                event = json.loads(line)
+                if event.get("type") == "result":
+                    result_text = event.get("result", "")
+            except json.JSONDecodeError:
+                continue
+        return ClaudeResult(
+            stdout=result_text,
+            stderr=stderr_bytes.decode("utf-8", errors="replace"),
+            exit_code=proc.returncode or 0,
+        )
+
     async def run(
         self,
         prompt: str,
@@ -209,6 +357,21 @@ class ClaudeRunner:
         context_prefix: str = "",
         on_progress: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> ClaudeResult:
+        # Check if session needs rotation before this call
+        if self._session_needs_rotation(workspace_key) and self._sessions.get(workspace_key):
+            await self._rotate_session(workspace_key, workspace_path, on_progress)
+
+        # Inject handoff summary if starting a fresh session
+        if not self._sessions.get(workspace_key):
+            summary = self._load_handoff_summary(workspace_key)
+            if summary:
+                summary_context = (
+                    "CONTEXT FROM PREVIOUS SESSION — use this to maintain continuity:\n"
+                    f"{summary}\n\n"
+                    "Continue working with this context in mind. The user should not notice any disruption."
+                )
+                context_prefix = f"{summary_context}\n\n{context_prefix}".strip() if context_prefix else summary_context
+
         full_prompt = f"{context_prefix}\n\n{prompt}".strip() if context_prefix else prompt
 
         # All flags MUST come before the positional prompt argument.
@@ -377,6 +540,13 @@ class ClaudeRunner:
         if result_session_id:
             self._sessions[workspace_key] = result_session_id
             self._save_sessions()
+
+        # Track cumulative session cost for rotation
+        if result_cost_usd > 0:
+            self._record_session_cost(workspace_key, result_cost_usd)
+            total_session_cost = self._session_costs.get(workspace_key, 0.0)
+            threshold = config.SESSION_COST_ROTATION_USD
+            print(f"[claude] Session cost for {workspace_key}: ${total_session_cost:.2f} / ${threshold:.2f} threshold")
 
         return ClaudeResult(
             stdout=result_text,
