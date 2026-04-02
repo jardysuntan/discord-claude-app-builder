@@ -20,6 +20,7 @@ from handlers import (
     system_commands,
     data_commands,
     integrate_commands,
+    monetize_commands,
 )
 
 COMMAND_HANDLERS = {
@@ -33,4 +34,5 @@ COMMAND_HANDLERS = {
     **system_commands.HANDLERS,
     **data_commands.HANDLERS,
     **integrate_commands.HANDLERS,
+    **monetize_commands.HANDLERS,
 }
