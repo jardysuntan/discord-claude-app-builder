@@ -159,6 +159,9 @@ def parse(text: str) -> ParseResult:
                 return Command(name="done")
 
             # ── Data ──────────────────────────────────────────────────
+            case "/syncdoc" | "/sync-doc":
+                return Command(name="syncdoc", raw_cmd=rest or None)
+
             case "/data":
                 data_parts = rest.split(None, 1) if rest else []
                 sub = data_parts[0].lower() if data_parts else None

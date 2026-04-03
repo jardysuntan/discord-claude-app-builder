@@ -183,15 +183,15 @@ async def handle_prompt(
             )
     await ctx.send(channel, result.stdout or "(empty)")
 
-    # Show context window usage
-    if result.context_tokens > 0:
-        threshold = config.SESSION_CONTEXT_ROTATION_TOKENS
-        pct = int(result.context_tokens / threshold * 100)
+    # Show session usage (resume count + cost)
+    resumes = ctx.claude.get_resume_count(ws_key)
+    max_resumes = config.SESSION_MAX_RESUMES
+    if resumes > 0:
+        pct = int(resumes / max_resumes * 100)
         bar_filled = min(pct // 10, 10)
         bar = "█" * bar_filled + "░" * (10 - bar_filled)
-        tokens_k = result.context_tokens / 1000
-        threshold_k = threshold / 1000
-        await ctx.send(channel, f"-# 🧠 Context: {bar} {tokens_k:.0f}k / {threshold_k:.0f}k tokens ({pct}%)")
+        cost_str = f" · ${result.total_cost_usd:.2f}" if result.total_cost_usd > 0 else ""
+        await ctx.send(channel, f"-# 🧠 Session: {bar} {resumes}/{max_resumes} prompts{cost_str}")
 
     # Auto-sync changed SQL files to Supabase (with per-app schema isolation)
     if sql_before and config.SUPABASE_PROJECT_REF and config.SUPABASE_MANAGEMENT_KEY:

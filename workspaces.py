@@ -208,6 +208,20 @@ class WorkspaceRegistry:
             entry["supabase_schema"] = schema_name
             self._save()
 
+    def get_google_doc_id(self, key: str) -> Optional[str]:
+        """Return the linked Google Doc ID for this workspace, or None."""
+        entry = self._workspaces.get(key.lower())
+        if not entry or not isinstance(entry, dict):
+            return None
+        return entry.get("google_doc_id")
+
+    def set_google_doc_id(self, key: str, doc_id: str):
+        """Store the Google Doc ID for a workspace."""
+        entry = self._workspaces.get(key.lower())
+        if entry and isinstance(entry, dict):
+            entry["google_doc_id"] = doc_id
+            self._save()
+
     def get_category(self, key: str) -> Optional[str]:
         """Return the category ('app', 'smoketest', 'experiment') or None."""
         entry = self._workspaces.get(key.lower())

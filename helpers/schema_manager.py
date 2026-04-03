@@ -6,6 +6,9 @@ Each app gets its own schema so tables, functions, and policies don't collide.
 
 import re
 
+import aiohttp
+
+import config
 from supabase_client import run_sql, query_sql
 
 
@@ -24,7 +27,7 @@ def schema_name_for_workspace(ws_key: str) -> str:
 
 
 async def ensure_schema(schema_name: str) -> tuple[bool, str]:
-    """Create the schema if it doesn't exist and grant usage to Supabase roles.
+    """Create the schema if it doesn't exist, grant usage, and expose via PostgREST.
 
     Returns (success, error_message_or_empty).
     """
@@ -39,7 +42,66 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA {schema_name}
 ALTER DEFAULT PRIVILEGES IN SCHEMA {schema_name}
     GRANT EXECUTE ON FUNCTIONS TO anon, authenticated;
 """
-    return await run_sql(sql)
+    ok, err = await run_sql(sql)
+    if not ok:
+        return ok, err
+
+    # Expose schema in PostgREST so the REST API can reach it
+    expose_ok, expose_err = await _expose_schema(schema_name)
+    if not expose_ok:
+        # Non-fatal: schema exists but REST API won't see it until manually exposed
+        return True, f"Schema created but PostgREST exposure failed: {expose_err}"
+    return True, ""
+
+
+async def _expose_schema(schema_name: str) -> tuple[bool, str]:
+    """Add schema to PostgREST's db_extra_search_path if not already present."""
+    if not config.SUPABASE_PROJECT_REF or not config.SUPABASE_MANAGEMENT_KEY:
+        return False, "SUPABASE_PROJECT_REF or SUPABASE_MANAGEMENT_KEY not set"
+
+    base = f"https://api.supabase.com/v1/projects/{config.SUPABASE_PROJECT_REF}"
+    headers = {
+        "Authorization": f"Bearer {config.SUPABASE_MANAGEMENT_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            # GET current PostgREST config
+            async with session.get(f"{base}/postgrest", headers=headers) as resp:
+                if resp.status != 200:
+                    return False, f"GET config failed: HTTP {resp.status}"
+                cfg = await resp.json()
+
+            # Check both db_schema (exposed) and db_extra_search_path
+            db_schema = cfg.get("db_schema", "public")
+            extra_path = cfg.get("db_extra_search_path", "public")
+            db_schemas = [s.strip() for s in db_schema.split(",") if s.strip()]
+            extra_schemas = [s.strip() for s in extra_path.split(",") if s.strip()]
+
+            if schema_name in db_schemas and schema_name in extra_schemas:
+                return True, ""  # Already exposed
+
+            if schema_name not in db_schemas:
+                db_schemas.append(schema_name)
+            if schema_name not in extra_schemas:
+                extra_schemas.append(schema_name)
+
+            # PATCH to expose the schema
+            async with session.patch(
+                f"{base}/postgrest",
+                headers=headers,
+                json={
+                    "db_schema": ", ".join(db_schemas),
+                    "db_extra_search_path": ", ".join(extra_schemas),
+                },
+            ) as resp:
+                if resp.status in (200, 201, 204):
+                    return True, ""
+                text = await resp.text()
+                return False, f"PATCH config failed: HTTP {resp.status} {text[:200]}"
+    except Exception as e:
+        return False, str(e)
 
 
 def set_search_path_sql(schema_name: str) -> str:

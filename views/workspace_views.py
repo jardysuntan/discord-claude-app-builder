@@ -47,18 +47,70 @@ class ConfirmDeleteView(discord.ui.View):
         pass
 
 
-class WorkspaceSelectorView(discord.ui.View):
-    """Shows workspace buttons for switching."""
+_PAGE_SIZE = 20  # max workspace buttons per page (leave room for nav row)
 
-    def __init__(self, ctx: BotContext, owner_id: int, keys: list[str]):
-        super().__init__(timeout=60)
+
+class WorkspaceSelectorView(discord.ui.View):
+    """Shows workspace buttons for switching, with pagination."""
+
+    def __init__(self, ctx: BotContext, owner_id: int, keys: list[str], page: int = 0):
+        super().__init__(timeout=120)
         self.ctx = ctx
         self.owner_id = owner_id
+        self.all_keys = keys
+        self.page = page
         self.footer_message = None  # set after footer is sent, so button can edit it
+        self.total_pages = max(1, (len(keys) + _PAGE_SIZE - 1) // _PAGE_SIZE)
+
         current = ctx.registry.get_default(owner_id)
-        for key in keys[:20]:
+        start = page * _PAGE_SIZE
+        page_keys = keys[start : start + _PAGE_SIZE]
+        for key in page_keys:
             style = discord.ButtonStyle.primary if key == current else discord.ButtonStyle.secondary
             self.add_item(WorkspaceButton(ctx, key, style, owner_id))
+
+        # Add nav buttons if more than one page
+        if self.total_pages > 1:
+            self.add_item(_PrevPageButton(ctx, owner_id, keys, page, disabled=page == 0))
+            self.add_item(_PageIndicatorButton(page, self.total_pages))
+            self.add_item(_NextPageButton(ctx, owner_id, keys, page, disabled=page >= self.total_pages - 1))
+
+
+class _PrevPageButton(discord.ui.Button):
+    def __init__(self, ctx: BotContext, owner_id: int, keys: list[str], page: int, disabled: bool):
+        super().__init__(label="\u25c0 Prev", style=discord.ButtonStyle.secondary, disabled=disabled, row=4)
+        self.ctx = ctx
+        self._owner_id = owner_id
+        self._keys = keys
+        self._page = page
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self._owner_id:
+            return await interaction.response.send_message("Not your command.", ephemeral=True)
+        new_view = WorkspaceSelectorView(self.ctx, self._owner_id, self._keys, self._page - 1)
+        label = f"**Your Apps** (page {self._page}/{new_view.total_pages})"
+        await interaction.response.edit_message(content=label, view=new_view)
+
+
+class _NextPageButton(discord.ui.Button):
+    def __init__(self, ctx: BotContext, owner_id: int, keys: list[str], page: int, disabled: bool):
+        super().__init__(label="Next \u25b6", style=discord.ButtonStyle.secondary, disabled=disabled, row=4)
+        self.ctx = ctx
+        self._owner_id = owner_id
+        self._keys = keys
+        self._page = page
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self._owner_id:
+            return await interaction.response.send_message("Not your command.", ephemeral=True)
+        new_view = WorkspaceSelectorView(self.ctx, self._owner_id, self._keys, self._page + 1)
+        label = f"**Your Apps** (page {self._page + 2}/{new_view.total_pages})"
+        await interaction.response.edit_message(content=label, view=new_view)
+
+
+class _PageIndicatorButton(discord.ui.Button):
+    def __init__(self, page: int, total_pages: int):
+        super().__init__(label=f"{page + 1}/{total_pages}", style=discord.ButtonStyle.secondary, disabled=True, row=4)
 
 
 class WorkspaceButton(discord.ui.Button):

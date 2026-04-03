@@ -145,17 +145,21 @@ async def ensure_app(bundle_id: str, workspace_key: str) -> tuple[bool, str]:
     app_name = workspace_key.replace("-", " ").replace("_", " ").title()
 
     try:
-        # Step 1: Ensure bundle ID is registered
-        asc_bundle_id = await find_bundle_id(bundle_id)
-        if not asc_bundle_id:
-            asc_bundle_id = await register_bundle_id(bundle_id, app_name)
-
-        # Step 2: Check if app record exists
+        # Step 1: Check if app record exists (most important check)
         app_id = await find_app(bundle_id)
-        if not app_id:
-            return False, f"No app record for `{bundle_id}` in App Store Connect."
+        if app_id:
+            return True, f"App `{bundle_id}` found in App Store Connect."
 
-        return True, f"App `{bundle_id}` found in App Store Connect."
+        # Step 2: App not found — try to ensure bundle ID is registered
+        # (this can fail with 403 if API key lacks bundleIds scope; that's ok)
+        try:
+            asc_bundle_id = await find_bundle_id(bundle_id)
+            if not asc_bundle_id:
+                asc_bundle_id = await register_bundle_id(bundle_id, app_name)
+        except Exception:
+            pass  # bundle ID registration is best-effort
+
+        return False, f"No app record for `{bundle_id}` in App Store Connect."
 
     except Exception as e:
         return False, f"Failed to check App Store Connect: {str(e)[:300]}"

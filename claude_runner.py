@@ -150,19 +150,29 @@ def _progress_from_event(event: dict, state: Optional[dict] = None) -> Optional[
 class ClaudeRunner:
     _SESSIONS_FILE = Path(config.WORKSPACES_PATH).parent / "claude_sessions.json"
     _SESSION_TOKENS_FILE = Path(config.WORKSPACES_PATH).parent / "claude_session_tokens.json"
+    _SESSION_RESUMES_FILE = Path(config.WORKSPACES_PATH).parent / "claude_session_resumes.json"
     _SUMMARIES_DIR = Path(config.SESSION_SUMMARIES_DIR)
 
     def __init__(self):
         self._sessions: dict[str, str] = {}
-        self._session_tokens: dict[str, int] = {}  # workspace → last known context size in tokens
+        self._session_tokens: dict[str, int] = {}  # workspace → last known cumulative tokens (informational)
+        self._session_resumes: dict[str, int] = {}  # workspace → number of prompts in current session
         self._run_durations: dict[str, list[float]] = {}  # workspace → last N durations
         self._active_procs: dict[str, asyncio.subprocess.Process] = {}
         self._claude_bin = _resolve_claude_bin()
         self._load_sessions()
         self._load_session_tokens()
+        self._load_session_resumes()
         self._SUMMARIES_DIR.mkdir(parents=True, exist_ok=True)
+        # Force rotation for existing sessions that don't have resume tracking yet
+        for ws in self._sessions:
+            if ws not in self._session_resumes:
+                self._session_resumes[ws] = config.SESSION_MAX_RESUMES
+        if self._session_resumes:
+            self._save_session_resumes()
         print(f"  Claude binary:   {self._claude_bin}")
         print(f"  Persisted sessions: {len(self._sessions)}")
+        print(f"  Session rotation: every {config.SESSION_MAX_RESUMES} prompts, ${config.MAX_INVOCATION_BUDGET_USD} budget cap")
 
     def _load_sessions(self):
         if self._SESSIONS_FILE.exists():
@@ -188,14 +198,30 @@ class ClaudeRunner:
         with open(self._SESSION_TOKENS_FILE, "w") as f:
             json.dump(self._session_tokens, f, indent=2)
 
+    def _load_session_resumes(self):
+        if self._SESSION_RESUMES_FILE.exists():
+            try:
+                with open(self._SESSION_RESUMES_FILE) as f:
+                    self._session_resumes = {k: int(v) for k, v in json.load(f).items()}
+            except (json.JSONDecodeError, ValueError):
+                self._session_resumes = {}
+
+    def _save_session_resumes(self):
+        with open(self._SESSION_RESUMES_FILE, "w") as f:
+            json.dump(self._session_resumes, f, indent=2)
+
     def _record_context_tokens(self, workspace: str, tokens: int):
-        """Update the last known context size for this workspace session."""
+        """Update the last known cumulative token count for this workspace (informational)."""
         self._session_tokens[workspace] = tokens
         self._save_session_tokens()
 
     def _session_needs_rotation(self, workspace: str) -> bool:
-        """Check if session context size exceeds the rotation threshold."""
-        return self._session_tokens.get(workspace, 0) >= config.SESSION_CONTEXT_ROTATION_TOKENS
+        """Check if session has exceeded the max number of resumed prompts."""
+        return self._session_resumes.get(workspace, 0) >= config.SESSION_MAX_RESUMES
+
+    def get_resume_count(self, workspace: str) -> int:
+        """Return the number of prompts sent in the current session."""
+        return self._session_resumes.get(workspace, 0)
 
     def _get_summary_path(self, workspace: str) -> Path:
         return self._SUMMARIES_DIR / f"{workspace}.md"
@@ -236,9 +262,9 @@ class ClaudeRunner:
 
     async def _rotate_session(self, workspace: str, workspace_path: str,
                               on_progress: Optional[Callable[[str], Awaitable[None]]] = None):
-        """Generate handoff summary, clear session, reset cost counter."""
-        tokens = self._session_tokens.get(workspace, 0)
-        print(f"[claude] Rotating session for {workspace} (context: {tokens:,} tokens)")
+        """Generate handoff summary, clear session, reset resume counter."""
+        resumes = self._session_resumes.get(workspace, 0)
+        print(f"[claude] Rotating session for {workspace} (resumes: {resumes}/{config.SESSION_MAX_RESUMES})")
 
         if on_progress:
             try:
@@ -264,10 +290,12 @@ class ClaudeRunner:
         else:
             print("[claude] No handoff summary generated — rotating anyway")
 
-        # Clear session and reset token counter
+        # Clear session and reset counters
         self.clear_session(workspace)
         self._session_tokens.pop(workspace, None)
         self._save_session_tokens()
+        self._session_resumes.pop(workspace, None)
+        self._save_session_resumes()
 
         if on_progress:
             try:
@@ -382,10 +410,14 @@ class ClaudeRunner:
             "-p",
             "--output-format", "stream-json",
             "--verbose",
+            "--max-budget-usd", str(config.MAX_INVOCATION_BUDGET_USD),
         ]
         session_id = self._sessions.get(workspace_key)
         if session_id:
             cmd += ["-r", session_id]
+            # Track resume count for rotation
+            self._session_resumes[workspace_key] = self._session_resumes.get(workspace_key, 0) + 1
+            self._save_session_resumes()
         cmd.append(full_prompt)  # positional prompt goes last
 
         print(f"[claude] Starting: workspace={workspace_key} prompt_len={len(full_prompt)}")
@@ -550,11 +582,11 @@ class ClaudeRunner:
             self._sessions[workspace_key] = result_session_id
             self._save_sessions()
 
-        # Track context size for rotation
+        # Track cumulative tokens (informational) and resume count
         if result_context_tokens > 0:
             self._record_context_tokens(workspace_key, result_context_tokens)
-            threshold = config.SESSION_CONTEXT_ROTATION_TOKENS
-            print(f"[claude] Context for {workspace_key}: {result_context_tokens:,} / {threshold:,} token threshold")
+        resumes = self._session_resumes.get(workspace_key, 0)
+        print(f"[claude] Session {workspace_key}: {resumes}/{config.SESSION_MAX_RESUMES} resumes, cumulative_tokens={result_context_tokens:,}")
 
         return ClaudeResult(
             stdout=result_text,

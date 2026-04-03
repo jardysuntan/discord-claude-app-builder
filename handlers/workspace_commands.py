@@ -29,6 +29,8 @@ async def handle_help(ctx: BotContext, cmd: Command, channel, user_id: int, is_a
 async def handle_ls(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
     user_email = ctx.allowlist.get_email(user_id) if not is_admin else None
     keys = ctx.registry.list_keys(owner_id=None if is_admin else user_id, user_email=user_email)
+    # Filter out smoketests and inactive workspaces
+    keys = [k for k in keys if ctx.registry.is_active(k) and ctx.registry.get_category(k) != "smoketest"]
     if not keys:
         await ctx.send(channel, "No workspaces.")
         return
@@ -40,7 +42,10 @@ async def handle_ls(ctx: BotContext, cmd: Command, channel, user_id: int, is_adm
     # ── Owned workspaces (buttons) ──
     if owned:
         view = WorkspaceSelectorView(ctx, user_id, owned)
-        await channel.send("**Your Apps:**", view=view)
+        label = "**Your Apps:**"
+        if view.total_pages > 1:
+            label = f"**Your Apps** (page 1/{view.total_pages})"
+        await channel.send(label, view=view)
         cmd._selector_view = view  # type: ignore[attr-defined]
 
     # ── Shared workspaces (embed + buttons) ──

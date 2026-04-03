@@ -416,20 +416,26 @@ def _schedule_cleanup(
     ws_path: str,
     passed: bool,
 ) -> None:
-    """Clean up workspace on pass; leave it for inspection on failure."""
-    if passed:
-        # Fire-and-forget CF Pages deletion
-        import asyncio
-        from helpers.cf_pages import cf_project_name, delete_cf_project
-        try:
-            asyncio.get_event_loop().create_task(
-                delete_cf_project(cf_project_name(slug))
-            )
-        except Exception:
-            pass
-        try:
-            shutil.rmtree(ws_path)
-        except Exception:
-            pass
-        registry.remove(slug)
-        result.workspace_path = "(cleaned up)"
+    """Always clean up smoke test workspaces and CF Pages deployments.
+
+    Previous behavior left failed runs for inspection, but this caused
+    orphaned directories (GBs on disk) and live CF Pages projects to
+    accumulate over time. Smoke test results are already captured in
+    the SmokeTestResult and posted to Discord, so there's no need to
+    keep the artifacts around.
+    """
+    # Fire-and-forget CF Pages deletion
+    import asyncio
+    from helpers.cf_pages import cf_project_name, delete_cf_project
+    try:
+        asyncio.get_event_loop().create_task(
+            delete_cf_project(cf_project_name(slug))
+        )
+    except Exception:
+        pass
+    try:
+        shutil.rmtree(ws_path)
+    except Exception:
+        pass
+    registry.remove(slug)
+    result.workspace_path = "(cleaned up)"

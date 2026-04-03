@@ -123,14 +123,12 @@ class AppraisalGateView(discord.ui.View):
         if interaction.user.id != self.user_id:
             return await interaction.response.send_message("Not your command.", ephemeral=True)
 
-        # Disable buttons
+        # Disable buttons and acknowledge interaction in one call
         for item in self.children:
             item.disabled = True
-        await interaction.message.edit(view=self)
+        await interaction.response.edit_message(view=self)
 
-        await interaction.response.send_message(
-            f"\U0001f680 Proceeding to {self.publish_target}...", ephemeral=True,
-        )
+        await self.channel.send(f"\U0001f680 Proceeding to {self.publish_target}...")
 
         # Late imports to avoid circular deps
         from handlers.publish_commands import (
