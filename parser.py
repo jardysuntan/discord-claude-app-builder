@@ -192,6 +192,10 @@ def parse(text: str) -> ParseResult:
             case "/history":
                 return Command(name="dashboard", raw_cmd=rest or None)
 
+            # ── Analytics ─────────────────────────────────────────────
+            case "/analytics":
+                return Command(name="analytics", workspace=rest.lower() if rest else None)
+
             # ── System ────────────────────────────────────────────────
             case "/setup":
                 return Command(name="setup")

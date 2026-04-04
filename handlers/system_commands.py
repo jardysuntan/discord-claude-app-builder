@@ -215,6 +215,20 @@ async def handle_history(ctx: BotContext, cmd: Command, channel, user_id: int, i
     await ctx.send(channel, text)
 
 
+async def handle_analytics(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
+    ws_key, ws_path = ctx.registry.resolve(cmd.workspace, user_id)
+    if not ws_key or not ws_path:
+        await ctx.send(channel, "❌ No workspace set. Use `/use <name>` first.")
+        return
+    await ctx.send(channel, "📊 Fetching analytics…")
+    try:
+        from commands.analytics import run_analytics
+        text = await run_analytics(ws_key, ws_path, ctx.registry)
+        await ctx.send(channel, text)
+    except Exception as e:
+        await ctx.send(channel, f"❌ Analytics failed: {e}")
+
+
 async def handle_unknown(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
     await ctx.send(channel, "❓ Unknown command. `/help`")
 
@@ -234,6 +248,7 @@ HANDLERS = {
     "newsession": handle_newsession,
     "maintenance": handle_maintenance,
     "announce": handle_announce,
+    "analytics": handle_analytics,
     "history": handle_history,
     "unknown": handle_unknown,
 }
