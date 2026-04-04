@@ -40,6 +40,7 @@ def help_text(is_admin: bool = True):
         "**Tools:**",
         "`/spend` — daily budget",
         "`/history` — build history, fix loops, cost & app health",
+        "`/analytics [app]` — TestFlight, Play Store & build metrics",
         "",
         "-# Discord limits messages to 2000 characters. For longer prompts, split across multiple messages.",
     ]
