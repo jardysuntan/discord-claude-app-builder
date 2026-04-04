@@ -3,8 +3,12 @@ commands/buildapp.py — One-message "idea to running app" for KMP.
 
 /buildapp <description>
   → scaffold KMP project → Claude builds features → auto-fix → demo all platforms
+
+When PARALLEL_BUILD=1, the Web and iOS build loops run concurrently after the
+initial Android build succeeds, cutting total generation time significantly.
 """
 
+import asyncio
 import re
 import time
 from typing import Callable, Awaitable, Optional
@@ -12,9 +16,9 @@ from typing import Callable, Awaitable, Optional
 import config
 from workspaces import WorkspaceRegistry
 from claude_runner import ClaudeRunner
-from agent_loop import run_agent_loop, format_loop_summary
+from agent_loop import run_agent_loop, AgentLoopResult, format_loop_summary
 from commands.create import create_kmp_project
-from platforms import AndroidPlatform, iOSPlatform, WebPlatform
+from platforms import AndroidPlatform, iOSPlatform, WebPlatform, build_platform
 from supabase_client import run_sql, extract_sql
 from helpers.schema_manager import schema_name_for_workspace, ensure_schema, set_search_path_sql, ensure_dashboard_function
 import glob
@@ -170,6 +174,87 @@ Instructions for the backend integration:
 """
 
     return base
+
+
+async def _run_parallel_platform_builds(
+    slug: str,
+    ws_path: str,
+    claude: ClaudeRunner,
+    on_status: Callable[[str, Optional[str]], Awaitable[None]],
+) -> tuple[AgentLoopResult, AgentLoopResult]:
+    """Run Web and iOS build loops concurrently using separate Claude sessions.
+
+    Each platform gets its own session key (``slug__web``, ``slug__ios``) so
+    the Claude runners don't collide on session state.  Status messages are
+    prefixed with the platform label so the user can tell them apart.
+    """
+
+    async def _build_platform(
+        platform: str,
+        session_key: str,
+        prompt: str,
+        label: str,
+    ) -> AgentLoopResult:
+        async def prefixed_status(msg):
+            await on_status(f"**[{label}]** {msg}", None)
+
+        await on_status(f"**[{label}]** Starting build...", None)
+        return await run_agent_loop(
+            initial_prompt=prompt,
+            workspace_key=session_key,
+            workspace_path=ws_path,
+            claude=claude,
+            platform=platform,
+            on_status=prefixed_status,
+        )
+
+    web_task = _build_platform(
+        platform="web",
+        session_key=f"{slug}__web",
+        prompt=(
+            "The Android target compiles. Now ensure the wasmJs web target "
+            "also compiles. Fix any web-specific issues. "
+            "Only modify what's necessary for web compatibility."
+        ),
+        label="🌐 Web",
+    )
+    ios_task = _build_platform(
+        platform="ios",
+        session_key=f"{slug}__ios",
+        prompt=(
+            "The Android target compiles. Now ensure the iOS target "
+            "also compiles. Fix any iOS-specific issues. "
+            "Only modify what's necessary for iOS compatibility. "
+            f"IMPORTANT: When running xcodebuild, always use: -destination 'name={config.IOS_SIMULATOR_NAME}'"
+        ),
+        label="🍎 iOS",
+    )
+
+    web_loop, ios_loop = await asyncio.gather(web_task, ios_task)
+
+    # ── Reconciliation: verify Android still compiles after parallel edits ──
+    android_check = await build_platform("android", ws_path)
+    if not android_check.success:
+        await on_status("🔧 Parallel edits broke Android — auto-fixing...", None)
+
+        async def recon_status(msg):
+            await on_status(f"**[🔧 Reconcile]** {msg}", None)
+
+        await run_agent_loop(
+            initial_prompt=(
+                "The Web and iOS build fixes were applied in parallel and "
+                "broke the Android build. Reconcile the changes so all "
+                "platforms compile. Only modify what's necessary.\n\n"
+                f"```\n{android_check.error[:800] if android_check.error else android_check.output[:800]}\n```"
+            ),
+            workspace_key=slug,
+            workspace_path=ws_path,
+            claude=claude,
+            platform="android",
+            on_status=recon_status,
+        )
+
+    return web_loop, ios_loop
 
 
 async def handle_buildapp(
@@ -363,24 +448,63 @@ async def handle_buildapp(
         )
         return slug
 
-    # 4. Web build + auto-fix (so anyone can try it in browser — show first)
-    await on_status("🌐 **Web** — building and fixing browser version...", None)
-    web_loop = await run_agent_loop(
-        initial_prompt=(
-            "The Android target compiles. Now ensure the wasmJs web target "
-            "also compiles. Fix any web-specific issues. "
-            "Only modify what's necessary for web compatibility."
-        ),
-        workspace_key=slug,
-        workspace_path=ws_path,
-        claude=claude,
-        platform="web",
-        on_status=loop_status,
-    )
-    web_summary = format_loop_summary(web_loop)
-    await on_status(web_summary, None)
-
+    # 4-6. Web + iOS builds (parallel when enabled, sequential otherwise)
+    ios_loop = None
+    ios_demo = None
     web_demo_url = None
+
+    if config.PARALLEL_BUILD and is_admin:
+        # ── Parallel: Web + iOS build simultaneously ──
+        await on_status("⚡ **Parallel build** — Web + iOS building simultaneously...", None)
+        web_loop, ios_loop = await _run_parallel_platform_builds(
+            slug, ws_path, claude, on_status,
+        )
+
+        # Report Web result
+        web_summary = format_loop_summary(web_loop)
+        await on_status(f"**[🌐 Web]** {web_summary}", None)
+
+        # Report iOS result
+        ios_loop_summary = format_loop_summary(ios_loop)
+        await on_status(f"**[🍎 iOS]** {ios_loop_summary}", None)
+    else:
+        # ── Sequential: Web first, then iOS ──
+        await on_status("🌐 **Web** — building and fixing browser version...", None)
+        web_loop = await run_agent_loop(
+            initial_prompt=(
+                "The Android target compiles. Now ensure the wasmJs web target "
+                "also compiles. Fix any web-specific issues. "
+                "Only modify what's necessary for web compatibility."
+            ),
+            workspace_key=slug,
+            workspace_path=ws_path,
+            claude=claude,
+            platform="web",
+            on_status=loop_status,
+        )
+        web_summary = format_loop_summary(web_loop)
+        await on_status(web_summary, None)
+
+        # iOS build (admin only — sequential fallback)
+        if is_admin:
+            await on_status("🍎 **iOS** — building and fixing simulator version...", None)
+            ios_loop = await run_agent_loop(
+                initial_prompt=(
+                    "The Android target compiles. Now ensure the iOS target "
+                    "also compiles. Fix any iOS-specific issues. "
+                    "Only modify what's necessary for iOS compatibility. "
+                    f"IMPORTANT: When running xcodebuild, always use: -destination 'name={config.IOS_SIMULATOR_NAME}'"
+                ),
+                workspace_key=slug,
+                workspace_path=ws_path,
+                claude=claude,
+                platform="ios",
+                on_status=loop_status,
+            )
+            ios_loop_summary = format_loop_summary(ios_loop)
+            await on_status(ios_loop_summary, None)
+
+    # ── Serve Web if build succeeded ──
     if web_loop.success:
         url = await WebPlatform.serve(ws_path, workspace_key=slug)
         if url:
@@ -399,33 +523,14 @@ async def handle_buildapp(
             None,
         )
 
-    # 5. Android demo (admin only — uses emulator)
+    # ── Android demo (admin only — uses emulator) ──
     if is_admin:
         await on_status("📱 **Android** — launching demo...", None)
         android_demo = await AndroidPlatform.full_demo(ws_path)
         await on_status(android_demo.message, android_demo.screenshot_path)
 
-    # 6. iOS build + auto-fix (admin only — uses simulator)
-    ios_loop = None
-    ios_demo = None
-    if is_admin:
-        await on_status("🍎 **iOS** — building and fixing simulator version...", None)
-        ios_loop = await run_agent_loop(
-            initial_prompt=(
-                "The Android target compiles. Now ensure the iOS target "
-                "also compiles. Fix any iOS-specific issues. "
-                "Only modify what's necessary for iOS compatibility. "
-                f"IMPORTANT: When running xcodebuild, always use: -destination 'name={config.IOS_SIMULATOR_NAME}'"
-            ),
-            workspace_key=slug,
-            workspace_path=ws_path,
-            claude=claude,
-            platform="ios",
-            on_status=loop_status,
-        )
-        ios_loop_summary = format_loop_summary(ios_loop)
-        await on_status(ios_loop_summary, None)
-
+    # ── iOS demo (admin only) ──
+    if is_admin and ios_loop:
         if ios_loop.success:
             await on_status("📱 Launching iOS demo...", None)
             ios_demo = await iOSPlatform.full_demo(ws_path)

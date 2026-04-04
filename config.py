@@ -109,6 +109,9 @@ MAX_INVOCATION_BUDGET_USD: float = float(os.getenv("MAX_INVOCATION_BUDGET_USD", 
 SESSION_SUMMARIES_DIR: str = os.getenv("SESSION_SUMMARIES_DIR", "./session_summaries")
 AUTO_FIX_ON_FAILURE: bool = os.getenv("AUTO_FIX_ON_FAILURE", "1") == "1"
 
+# ── Parallel Builds ─────────────────────────────────────────────────────────
+PARALLEL_BUILD: bool = os.getenv("PARALLEL_BUILD", "1") == "1"
+
 
 def validate() -> list[str]:
     problems = []
@@ -136,5 +139,6 @@ def print_config_summary():
     print(f"  Play Store:      {'configured' if PLAY_JSON_KEY_PATH else 'not configured'}")
     print(f"  Supabase:        {'configured' if SUPABASE_PROJECT_REF and SUPABASE_MANAGEMENT_KEY else 'not configured'}")
     print(f"  CF Pages:        {'configured' if CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID else 'not configured'}")
+    print(f"  Parallel build:  {'ON' if PARALLEL_BUILD else 'OFF'}")
     print(f"  Run mode:        {RUN_MODE}")
     print(f"  Accounts:        {ACCOUNTS_PATH}")
