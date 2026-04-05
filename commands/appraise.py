@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from claude_runner import ClaudeRunner
+from agent_protocol import AgentRunner
 
 
 # ── Constants ───────────────────────────────────────────────────────────────
@@ -757,7 +757,7 @@ def _build_appraisal_dict(
 # ── Main entry point ───────────────────────────────────────────────────────
 
 async def run_appraisal(
-    claude: ClaudeRunner,
+    claude: AgentRunner,
     ws_key: str,
     ws_path: str,
     platform: str = "both",

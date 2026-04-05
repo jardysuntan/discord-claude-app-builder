@@ -18,6 +18,7 @@ from pydantic import BaseModel
 import uvicorn
 
 import service
+from agent_factory import get_provider_capabilities
 from accounts import AccountManager, Account
 
 # ── Logging ──────────────────────────────────────────────────────────────────
@@ -249,6 +250,7 @@ async def get_account(account: Account = Depends(get_current_account)):
         "discord_user_id": account.discord_user_id,
         "shared_store_access": account.shared_store_access,
         "capabilities": mgr.get_capabilities(account.account_id),
+        "agent_provider": get_provider_capabilities().__dict__,
         "setup_checklist": mgr.get_setup_checklist(account.account_id),
         "created_at": account.created_at,
     }
@@ -420,8 +422,9 @@ async def send_prompt(slug: str, req: PromptRequestModel,
     """Send a prompt to a workspace. Returns build_id for polling."""
     _check_workspace_access(account, slug)
     try:
-        status = await service.send_prompt(service.PromptRequest(workspace=slug, prompt=req.prompt))
-        status.webhook_url = req.webhook_url
+        status = await service.send_prompt(
+            service.PromptRequest(workspace=slug, prompt=req.prompt, webhook_url=req.webhook_url)
+        )
         return _status_to_response(status)
     except ValueError as e:
         raise HTTPException(404, str(e))

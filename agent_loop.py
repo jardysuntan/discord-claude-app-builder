@@ -8,8 +8,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional, Callable, Awaitable
 
+from agent_protocol import AgentRunner
 import config
-from claude_runner import ClaudeRunner
 from commands.build_log import log_build
 from commands.fixes_cmd import log_fix, get_recent_fixes
 from helpers.budget import BudgetTracker
@@ -46,11 +46,12 @@ async def run_agent_loop(
     initial_prompt: str,
     workspace_key: str,
     workspace_path: str,
-    claude: ClaudeRunner,
+    claude: AgentRunner,
     platform: str = "android",
     max_attempts: int = None,
     on_status: Optional[Callable[[str], Awaitable[None]]] = None,
     budget: Optional[BudgetTracker] = None,
+    context_prefix: str = "",
 ) -> AgentLoopResult:
     """
     1. Send initial prompt to Claude
@@ -76,6 +77,7 @@ async def run_agent_loop(
 
         initial_result = await claude.run(
             initial_prompt, workspace_key, workspace_path,
+            context_prefix=context_prefix,
             on_progress=on_status,
         )
         if budget:
@@ -197,6 +199,7 @@ async def run_agent_loop(
         for fix_try in range(1, 3):
             fix_result = await claude.run(
                 fix_prompt, workspace_key, workspace_path,
+                context_prefix=context_prefix,
                 on_progress=on_status,
             )
             if budget:

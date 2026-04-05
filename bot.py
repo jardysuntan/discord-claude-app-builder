@@ -11,10 +11,10 @@ from pathlib import Path
 import discord
 
 import config
+from agent_factory import create_agent_runner
 import parser as msg_parser
 from parser import WorkspacePrompt, Command, FallbackPrompt
 from workspaces import WorkspaceRegistry
-from claude_runner import ClaudeRunner
 from cost_tracker import CostTracker
 from allowlist import Allowlist
 from accounts import AccountManager
@@ -23,6 +23,7 @@ from handlers import COMMAND_HANDLERS
 from handlers.prompt_handler import handle_prompt
 from handlers.public_commands import HANDLERS as PUBLIC_HANDLERS
 from helpers.ui_helpers import send_workspace_footer
+from helpers.error_reporter import report_error_and_fix, format_exception
 from helpers.welcome import welcome_embed, WelcomeView
 from commands.playstore_state import PlayStoreState
 from views.playstore_views import PlayStoreChecklistView, _playstore_checklist_embed
@@ -39,7 +40,7 @@ print("🤖 discord-claude-bridge v2 (KMP)")
 config.print_config_summary()
 
 registry = WorkspaceRegistry()
-claude = ClaudeRunner()
+claude = create_agent_runner()
 cost_tracker = CostTracker()
 allowlist = Allowlist()
 account_mgr = AccountManager()
@@ -197,7 +198,14 @@ async def on_message(message: discord.Message):
 
     # ── Claude prompts ───────────────────────────────────────────────────
     if isinstance(parsed, (WorkspacePrompt, FallbackPrompt)):
-        await handle_prompt(ctx, parsed, channel, user_id, is_admin, attachments=message.attachments)
+        try:
+            await handle_prompt(ctx, parsed, channel, user_id, is_admin, attachments=message.attachments)
+        except Exception as exc:
+            title, detail = format_exception(exc)
+            ctx_str = f"prompt from user={user_id}"
+            await ctx.send(channel, f"❌ Unhandled error: `{title}`\n"
+                                    f"Filing a bug + async fix PR…")
+            await report_error_and_fix(title, detail, ctx_str)
         return
 
     # ── Commands ─────────────────────────────────────────────────────────
@@ -207,7 +215,14 @@ async def on_message(message: discord.Message):
     cmd = parsed
     handler = COMMAND_HANDLERS.get(cmd.name)
     if handler:
-        await handler(ctx, cmd, channel, user_id, is_admin)
+        try:
+            await handler(ctx, cmd, channel, user_id, is_admin)
+        except Exception as exc:
+            title, detail = format_exception(exc)
+            ctx_str = f"/{cmd.name} by user={user_id}"
+            await ctx.send(channel, f"❌ Unhandled error in `/{cmd.name}`: `{title}`\n"
+                                    f"Filing a bug + async fix PR…")
+            await report_error_and_fix(title, detail, ctx_str)
     else:
         await ctx.send(channel, "❓ Unknown command. `/help`")
 

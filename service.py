@@ -9,12 +9,13 @@ import shutil
 import time
 import uuid
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Callable, Awaitable, Optional
 
+from agent_factory import create_agent_runner
+from agent_protocol import AgentRunner
 from workspaces import WorkspaceRegistry
-from claude_runner import ClaudeRunner
 from commands.buildapp import handle_buildapp
 from commands import git_cmd
 from commands.planapp import generate_plan
@@ -23,6 +24,10 @@ from agent_loop import run_agent_loop, format_loop_summary
 from platforms import build_platform, demo_platform, WebPlatform
 
 logger = logging.getLogger("api.service")
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 # ── Data classes ─────────────────────────────────────────────────────────────
 
@@ -51,6 +56,7 @@ class BuildStatus:
 class PromptRequest:
     workspace: str
     prompt: str
+    webhook_url: str | None = None
 
 @dataclass
 class WorkspaceInfo:
@@ -64,7 +70,7 @@ class WorkspaceInfo:
 # ── Singleton state ──────────────────────────────────────────────────────────
 
 _registry: WorkspaceRegistry | None = None
-_claude: ClaudeRunner | None = None
+_agent_runner: AgentRunner | None = None
 _builds: dict[str, BuildStatus] = {}
 
 # ── Analytics tracking ───────────────────────────────────────────────────────
@@ -124,6 +130,18 @@ async def _send_webhook_event(webhook_url: str | None, event: dict):
             await client.post(webhook_url, json=event)
     except Exception as e:
         logger.warning(f"Webhook delivery failed: {e}")
+
+
+async def _emit_completion_event(status: BuildStatus):
+    await _send_webhook_event(status.webhook_url, {
+        "build_id": status.build_id,
+        "timestamp": _utc_timestamp(),
+        "event": "complete",
+        "phase": "complete",
+        "message": status.message,
+        "elapsed_seconds": status.elapsed_seconds,
+        "detail": {"status": status.status, "slug": status.slug, "platforms": status.platforms},
+    })
 
 
 def _infer_phase(msg: str, current_phase: str) -> str:
@@ -186,11 +204,11 @@ def _classify_event(msg: str, phase: str) -> tuple[str, dict]:
     return "progress", {}
 
 
-def init(registry: WorkspaceRegistry | None = None, claude: ClaudeRunner | None = None):
+def init(registry: WorkspaceRegistry | None = None, claude: AgentRunner | None = None):
     """Initialize the service layer with shared instances."""
-    global _registry, _claude
+    global _registry, _agent_runner
     _registry = registry or WorkspaceRegistry()
-    _claude = claude or ClaudeRunner()
+    _agent_runner = claude or create_agent_runner()
 
 
 def _get_registry() -> WorkspaceRegistry:
@@ -200,11 +218,11 @@ def _get_registry() -> WorkspaceRegistry:
     return _registry
 
 
-def _get_claude() -> ClaudeRunner:
-    global _claude
-    if _claude is None:
-        _claude = ClaudeRunner()
-    return _claude
+def _get_agent_runner() -> AgentRunner:
+    global _agent_runner
+    if _agent_runner is None:
+        _agent_runner = create_agent_runner()
+    return _agent_runner
 
 
 def _resolve_credentials(account_id: str | None) -> dict | None:
@@ -260,14 +278,14 @@ async def build_app(request: BuildRequest) -> BuildStatus:
 
     async def _run_build():
         registry = _get_registry()
-        claude = _get_claude()
+        claude = _get_agent_runner()
         start = time.time()
         webhook_url = request.webhook_url
 
         # Send "started" event
         await _send_webhook_event(webhook_url, {
             "build_id": build_id,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": _utc_timestamp(),
             "event": "started",
             "phase": "scaffolding",
             "message": f"Building {request.app_name or 'app'}...",
@@ -289,7 +307,7 @@ async def build_app(request: BuildRequest) -> BuildStatus:
             event_type, detail = _classify_event(msg, status.phase)
             await _send_webhook_event(webhook_url, {
                 "build_id": build_id,
-                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "timestamp": _utc_timestamp(),
                 "event": event_type,
                 "phase": status.phase,
                 "message": msg,
@@ -326,7 +344,7 @@ async def build_app(request: BuildRequest) -> BuildStatus:
             # Send "complete" event
             await _send_webhook_event(webhook_url, {
                 "build_id": build_id,
-                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "timestamp": _utc_timestamp(),
                 "event": "complete",
                 "phase": "complete",
                 "message": f"Build {'succeeded' if status.status == 'success' else 'failed'}",
@@ -347,7 +365,7 @@ async def build_app(request: BuildRequest) -> BuildStatus:
             # Send "error" event
             await _send_webhook_event(webhook_url, {
                 "build_id": build_id,
-                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "timestamp": _utc_timestamp(),
                 "event": "error",
                 "phase": "complete",
                 "message": f"Build error: {e}",
@@ -364,7 +382,7 @@ async def build_app(request: BuildRequest) -> BuildStatus:
 async def send_prompt(request: PromptRequest) -> BuildStatus:
     """Send a prompt to an existing workspace. Runs in background."""
     registry = _get_registry()
-    claude = _get_claude()
+    claude = _get_agent_runner()
     
     ws_path = registry.get_path(request.workspace)
     if not ws_path:
@@ -377,6 +395,7 @@ async def send_prompt(request: PromptRequest) -> BuildStatus:
         status="building",
         phase="building",
         message="Sending prompt to Claude...",
+        webhook_url=request.webhook_url,
     )
     _builds[build_id] = status
 
@@ -406,16 +425,8 @@ async def send_prompt(request: PromptRequest) -> BuildStatus:
             status.phase = "complete"
             status.message = f"Error: {e}"
 
-        _track_build("prompt", slug, status.status == "success", status.elapsed_seconds)
-        await _send_webhook_event(status.webhook_url, {
-            "build_id": status.build_id,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-            "event": "complete",
-            "phase": "complete",
-            "message": status.message,
-            "elapsed_seconds": status.elapsed_seconds,
-            "detail": {"status": status.status, "slug": status.slug, "platforms": status.platforms},
-        })
+        _track_build("prompt", status.slug, status.status == "success", status.elapsed_seconds)
+        await _emit_completion_event(status)
 
     asyncio.create_task(_run())
     return status
@@ -488,15 +499,7 @@ async def demo_workspace(slug: str, platform: str = "web") -> BuildStatus:
             status.message = f"Error: {e}"
 
         _track_build("demo", slug, status.status == "success", status.elapsed_seconds)
-        await _send_webhook_event(status.webhook_url, {
-            "build_id": status.build_id,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-            "event": "complete",
-            "phase": "complete",
-            "message": status.message,
-            "elapsed_seconds": status.elapsed_seconds,
-            "detail": {"status": status.status, "slug": status.slug, "platforms": status.platforms},
-        })
+        await _emit_completion_event(status)
 
     asyncio.create_task(_run())
     return status
@@ -533,7 +536,7 @@ async def delete_workspace(slug: str, force: bool = False) -> bool:
 
 async def clear_session(slug: str) -> None:
     """Clear the Claude session for a workspace (fresh conversation)."""
-    claude = _get_claude()
+    claude = _get_agent_runner()
     claude.clear_session(slug)
 
 
@@ -571,15 +574,7 @@ async def build_workspace_platform(slug: str, platform: str = "web") -> BuildSta
             status.message = f"Error: {e}"
 
         _track_build("build", slug, status.status == "success", status.elapsed_seconds)
-        await _send_webhook_event(status.webhook_url, {
-            "build_id": status.build_id,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-            "event": "complete",
-            "phase": "complete",
-            "message": status.message,
-            "elapsed_seconds": status.elapsed_seconds,
-            "detail": {"status": status.status, "slug": status.slug, "platforms": status.platforms},
-        })
+        await _emit_completion_event(status)
 
     asyncio.create_task(_run())
     return status
@@ -587,7 +582,7 @@ async def build_workspace_platform(slug: str, platform: str = "web") -> BuildSta
 
 async def plan_app(description: str) -> dict | None:
     """Generate an app plan synchronously. Returns plan dict or None."""
-    claude = _get_claude()
+    claude = _get_agent_runner()
     return await generate_plan(description, claude)
 
 
@@ -598,7 +593,7 @@ async def appraise_workspace(slug: str) -> BuildStatus:
     if not ws_path:
         raise ValueError(f"Workspace '{slug}' not found")
 
-    claude = _get_claude()
+    claude = _get_agent_runner()
     build_id = str(uuid.uuid4())[:8]
     status = BuildStatus(
         build_id=build_id,
@@ -628,15 +623,7 @@ async def appraise_workspace(slug: str) -> BuildStatus:
             status.message = f"Error: {e}"
 
         _track_build("appraise", slug, status.status == "success", status.elapsed_seconds)
-        await _send_webhook_event(status.webhook_url, {
-            "build_id": status.build_id,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-            "event": "complete",
-            "phase": "complete",
-            "message": status.message,
-            "elapsed_seconds": status.elapsed_seconds,
-            "detail": {"status": status.status, "slug": status.slug, "platforms": status.platforms},
-        })
+        await _emit_completion_event(status)
 
     asyncio.create_task(_run())
     return status
@@ -670,7 +657,7 @@ async def git_log(slug: str, count: int = 10) -> str:
 
 async def git_commit(slug: str, message: str | None = None, auto_push: bool = False) -> str:
     ws_key, ws_path = _resolve_workspace(slug)
-    claude = _get_claude()
+    claude = _get_agent_runner()
     return await git_cmd.handle_commit(ws_path, ws_key, message=message, claude=claude, auto_push=auto_push)
 
 
