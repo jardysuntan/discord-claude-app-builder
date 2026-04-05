@@ -27,8 +27,8 @@ import re
 import shlex
 from typing import Optional, Callable, Awaitable
 
+from agent_protocol import AgentRunner
 import config
-from claude_runner import ClaudeRunner
 
 
 async def _git(args: list[str], cwd: str, timeout: int = 30) -> tuple[int, str]:
@@ -145,7 +145,7 @@ async def handle_commit(
     ws_path: str,
     ws_key: str,
     message: Optional[str] = None,
-    claude: Optional[ClaudeRunner] = None,
+    claude: Optional[AgentRunner] = None,
     auto_push: bool = False,
 ) -> str:
     # Ensure it's a repo
@@ -197,7 +197,7 @@ async def auto_commit_if_enabled(
     ws_path: str,
     ws_key: str,
     context: str,
-    claude: Optional[ClaudeRunner] = None,
+    claude: Optional[AgentRunner] = None,
 ) -> Optional[str]:
     """
     Auto-commit after successful build. Returns commit message or None.
@@ -286,7 +286,7 @@ async def handle_pr(
     ws_path: str,
     ws_key: str,
     title: Optional[str] = None,
-    claude: Optional[ClaudeRunner] = None,
+    claude: Optional[AgentRunner] = None,
 ) -> str:
     # Check we're not on main
     _, branch = await _git(["branch", "--show-current"], ws_path)
@@ -409,7 +409,7 @@ def _relative_date(iso: str) -> str:
 async def prepare_save(
     ws_path: str,
     ws_key: str,
-    claude: Optional[ClaudeRunner] = None,
+    claude: Optional[AgentRunner] = None,
 ) -> tuple[int, str] | str:
     """Stage changes and generate description. Returns (save_number, description) or error string."""
     ok, msg = await ensure_git_repo(ws_path)
@@ -498,7 +498,7 @@ async def commit_save(ws_path: str, num: int, description: str) -> str:
 async def handle_save(
     ws_path: str,
     ws_key: str,
-    claude: Optional[ClaudeRunner] = None,
+    claude: Optional[AgentRunner] = None,
     custom_msg: Optional[str] = None,
 ) -> str:
     """Commit all changes, auto-describe with Claude, tag as save-N."""

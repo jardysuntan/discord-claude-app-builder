@@ -14,16 +14,12 @@ from pathlib import Path
 from typing import Optional, Callable, Awaitable
 
 import config
+from agent_protocol import AgentRunResult
 
 
 @dataclass
-class ClaudeResult:
-    stdout: str
-    stderr: str
-    exit_code: int
-    session_id: Optional[str] = None
-    total_cost_usd: float = 0.0
-    context_tokens: int = 0  # total input context (input + cache_creation + cache_read)
+class ClaudeResult(AgentRunResult):
+    """Concrete result type kept for backward compatibility."""
 
 
 def _resolve_claude_bin() -> str:

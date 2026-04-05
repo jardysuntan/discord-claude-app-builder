@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Awaitable, Optional
 
-from claude_runner import ClaudeRunner
+from agent_protocol import AgentRunner
 from agent_loop import run_agent_loop, format_loop_summary
 
 
@@ -159,7 +159,7 @@ async def run_integration(
     integration: Integration,
     workspace_key: str,
     workspace_path: str,
-    claude: ClaudeRunner,
+    claude: AgentRunner,
     on_status: Callable[[str], Awaitable[None]],
     platform: str = "android",
 ) -> bool:

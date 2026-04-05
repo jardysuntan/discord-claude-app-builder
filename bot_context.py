@@ -14,8 +14,8 @@ from pathlib import Path
 import discord
 
 import config
+from agent_protocol import AgentRunner
 from workspaces import WorkspaceRegistry
-from claude_runner import ClaudeRunner
 from cost_tracker import CostTracker
 from allowlist import Allowlist
 from accounts import AccountManager
@@ -52,7 +52,7 @@ class BotContext:
 
     client: discord.Client
     registry: WorkspaceRegistry
-    claude: ClaudeRunner
+    claude: AgentRunner
     cost_tracker: CostTracker
     allowlist: Allowlist
     account_mgr: AccountManager

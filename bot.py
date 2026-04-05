@@ -11,10 +11,10 @@ from pathlib import Path
 import discord
 
 import config
+from agent_factory import create_agent_runner
 import parser as msg_parser
 from parser import WorkspacePrompt, Command, FallbackPrompt
 from workspaces import WorkspaceRegistry
-from claude_runner import ClaudeRunner
 from cost_tracker import CostTracker
 from allowlist import Allowlist
 from accounts import AccountManager
@@ -40,7 +40,7 @@ print("🤖 discord-claude-bridge v2 (KMP)")
 config.print_config_summary()
 
 registry = WorkspaceRegistry()
-claude = ClaudeRunner()
+claude = create_agent_runner()
 cost_tracker = CostTracker()
 allowlist = Allowlist()
 account_mgr = AccountManager()

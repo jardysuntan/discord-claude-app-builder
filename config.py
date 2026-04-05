@@ -27,6 +27,7 @@ TEMPLATES_DIR: str = os.getenv("TEMPLATES_DIR", "./templates")
 # ── Claude ───────────────────────────────────────────────────────────────────
 CLAUDE_BIN: str = os.getenv("CLAUDE_BIN", "claude")
 CLAUDE_TIMEOUT: int = int(os.getenv("CLAUDE_TIMEOUT", "180"))
+AGENT_PROVIDER: str = os.getenv("AGENT_PROVIDER", "claude")
 
 # ── Agent Mode ───────────────────────────────────────────────────────────────
 AGENT_MODE: bool = os.getenv("AGENT_MODE", "0") == "1"
@@ -127,6 +128,7 @@ def print_config_summary():
     print(f"  Discord token:   {token_preview}")
     print(f"  Allowed user:    {DISCORD_ALLOWED_USER_ID}")
     print(f"  Agent mode:      {'ON' if AGENT_MODE else 'OFF'}")
+    print(f"  Agent provider:  {AGENT_PROVIDER}")
     print(f"  Claude:          {CLAUDE_BIN} (timeout: {CLAUDE_TIMEOUT}s)")
     print(f"  Android AVD:     {ANDROID_AVD or '(none)'}")
     print(f"  iOS Simulator:   {IOS_SIMULATOR_NAME}")
