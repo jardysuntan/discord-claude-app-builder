@@ -1393,7 +1393,7 @@ async def export_ipa(archive_path: str, workspace_path: str, team_id: str) -> tu
         f'    <key>teamID</key>\n    <string>{team_id}</string>\n'
         '    <key>signingStyle</key>\n    <string>automatic</string>\n'
         '    <key>uploadSymbols</key>\n    <true/>\n'
-        '    <key>destination</key>\n    <string>upload</string>\n'
+        '    <key>destination</key>\n    <string>export</string>\n'
         '</dict>\n</plist>\n'
     )
 
@@ -1404,7 +1404,7 @@ async def export_ipa(archive_path: str, workspace_path: str, team_id: str) -> tu
         "-exportOptionsPlist", str(plist_path),
         "-exportPath", str(export_dir),
         "-allowProvisioningUpdates",
-    ], timeout=300)
+    ], timeout=900)
 
     raw = out + err
     if rc != 0:

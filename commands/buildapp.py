@@ -17,6 +17,7 @@ from commands.create import create_kmp_project
 from platforms import AndroidPlatform, iOSPlatform, WebPlatform
 from supabase_client import run_sql, extract_sql
 from helpers.schema_manager import schema_name_for_workspace, ensure_schema, set_search_path_sql, ensure_dashboard_function
+from helpers.error_reporter import report_error_and_fix
 import glob
 import os
 
@@ -360,6 +361,12 @@ async def handle_buildapp(
         await on_status(
             f"Android build didn't succeed. Try `@{slug} <fix instructions>`.",
             None,
+        )
+        loop_detail = format_loop_summary(loop_result)
+        await report_error_and_fix(
+            title=f"/buildapp android loop failed ({slug})",
+            detail=f"App: {app_name}\nDescription: {description[:300]}\n\n{loop_detail}",
+            context=f"/buildapp workspace={slug} stage=android-loop attempts={loop_result.total_attempts}",
         )
         return slug
 

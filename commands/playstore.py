@@ -17,6 +17,7 @@ from typing import Callable, Awaitable, Optional
 import config
 from play_api import check_app_exists, upload_aab, poll_processing
 from platforms import AndroidPlatform, preflight_fix_android
+from helpers.error_reporter import report_error_and_fix
 
 
 async def _email_file(file_path: str, to_email: str, subject: str, body: str) -> bool:
@@ -189,6 +190,11 @@ async def handle_playstore(
             f"❌ Build failed:\n```\n{build_result.error[:1200]}\n```",
             None,
         )
+        await report_error_and_fix(
+            title=f"/playstore AAB build failed ({workspace_key})",
+            detail=build_result.error or "build returned no error detail",
+            context=f"/playstore workspace={workspace_key} stage=bundle-release package={package_name}",
+        )
         return PlayStoreResult(success=False)
     aab_path = build_result.output
     await on_status("AAB built successfully.", None)
@@ -230,4 +236,9 @@ async def handle_playstore(
             )
         else:
             await on_status(f"❌ {upload_msg}", None)
+            await report_error_and_fix(
+                title=f"/playstore upload failed ({workspace_key})",
+                detail=upload_msg or "upload returned no detail",
+                context=f"/playstore workspace={workspace_key} stage=upload package={package_name} version={version_code}",
+            )
         return PlayStoreResult(success=False, aab_path=aab_path, first_upload=is_first)

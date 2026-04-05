@@ -20,6 +20,7 @@ from platforms import (
     demo_platform,
 )
 from helpers.web_screenshot import take_web_screenshot
+from helpers.error_reporter import report_error_and_fix
 
 
 async def run_demo_all(ctx, channel, ws_key: str, ws_path: str,
@@ -45,7 +46,13 @@ async def run_demo_all(ctx, channel, ws_key: str, ws_path: str,
             await run_demo(ctx, channel, ws_key, ws_path, platform,
                            budget=budget, announce=False)
         except Exception as exc:
+            import traceback
             await ctx.send(channel, f"❌ {platform} demo failed: {exc}")
+            await report_error_and_fix(
+                title=f"/demo {platform} crashed ({ws_key})",
+                detail="".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+                context=f"/demo workspace={ws_key} platform={platform} stage=run_demo-exception",
+            )
 
     await asyncio.gather(
         _run_native("ios"),
@@ -179,6 +186,11 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str,
                                 pass  # already reported above
                             else:
                                 await ctx.send(channel, f"❌ App still crashing after {config.MAX_BUILD_ATTEMPTS} fix attempts.")
+                                await report_error_and_fix(
+                                    title=f"/demo ios crash-loop unfixed ({ws_key})",
+                                    detail=f"Runtime crash log:\n{crash_log[:2500]}",
+                                    context=f"/demo workspace={ws_key} platform=ios stage=crash-loop attempts={config.MAX_BUILD_ATTEMPTS}",
+                                )
                             return
 
                     # App is running — take screenshot
@@ -305,6 +317,11 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str,
                                     pass
                                 else:
                                     await ctx.send(channel, f"❌ App still crashing after {config.MAX_BUILD_ATTEMPTS} fix attempts.")
+                                    await report_error_and_fix(
+                                        title=f"/demo android crash-loop unfixed ({ws_key})",
+                                        detail=f"Runtime crash log:\n{crash_log[:2500]}",
+                                        context=f"/demo workspace={ws_key} platform=android stage=crash-loop attempts={config.MAX_BUILD_ATTEMPTS}",
+                                    )
                                 return
 
                         # App is running — take screenshot
@@ -421,6 +438,11 @@ async def run_demo(ctx, channel, ws_key: str, ws_path: str, platform: str,
                             pass
                         else:
                             await ctx.send(channel, f"❌ Web app still unhealthy after {config.MAX_BUILD_ATTEMPTS} fix attempts.")
+                            await report_error_and_fix(
+                                title=f"/demo web health-check unfixed ({ws_key})",
+                                detail=f"Health check error:\n{health_err[:2500]}",
+                                context=f"/demo workspace={ws_key} platform=web stage=health-check attempts={config.MAX_BUILD_ATTEMPTS}",
+                            )
                         return
 
                 await progress.close()
