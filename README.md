@@ -98,6 +98,7 @@ DISCORD_BOT_TOKEN=your-bot-token
 DISCORD_ALLOWED_USER_ID=your-discord-user-id
 BASE_PROJECTS_DIR=~/Projects
 CLAUDE_BIN=claude
+AGENT_PROVIDER=claude
 ```
 
 **Run:**
@@ -154,6 +155,7 @@ Discord DM → parser.py → bot.py → handler
 
 **Key design:**
 - Claude sessions persist per workspace — context carries over between prompts
+- Workspace specs persist product intent in `.bridge/workspace_spec.json` so future LLM backends can reuse plan/schema context
 - Auto-fix loop — build errors get fed back to Claude (up to 8 retries)
 - Crash detection — iOS/Android demos detect crash-on-launch and auto-fix
 - Fix memory — every error+fix is logged and injected into future fix prompts

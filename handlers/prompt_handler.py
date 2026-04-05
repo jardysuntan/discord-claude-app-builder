@@ -31,6 +31,7 @@ from helpers.screenshot_compare import (
     build_visual_diff_prompt,
     _guess_route_from_text,
 )
+from workspace_spec import format_spec_context, load_workspace_spec
 
 if TYPE_CHECKING:
     from bot_context import BotContext
@@ -87,6 +88,9 @@ async def handle_prompt(
     if not ctx.registry.can_access(ws_key, user_id, is_admin, user_email=ctx.allowlist.get_email(user_id)):
         return await ctx.send(channel, "You don't have access to that workspace.")
 
+    spec = load_workspace_spec(ws_path)
+    context_prefix = format_spec_context(spec) if spec else ""
+
     # Cost gating
     user_cap = ctx.allowlist.get_daily_cap(user_id)
     if not ctx.cost_tracker.can_afford(user_cap, user_id):
@@ -142,7 +146,13 @@ async def handle_prompt(
     async def claude_progress(msg):
         await ctx.send(channel, msg)
 
-    result = await ctx.claude.run(prompt, ws_key, ws_path, on_progress=claude_progress)
+    result = await ctx.claude.run(
+        prompt,
+        ws_key,
+        ws_path,
+        context_prefix=context_prefix,
+        on_progress=claude_progress,
+    )
 
     # Remove cancel button now that Claude is done
     try:
@@ -170,7 +180,13 @@ async def handle_prompt(
         if not error_detail or "timeout" in error_detail.lower():
             ctx.claude.clear_session(ws_key)
             await ctx.send(channel, "⚠️ Claude failed, retrying...")
-            result = await ctx.claude.run(prompt, ws_key, ws_path, on_progress=claude_progress)
+            result = await ctx.claude.run(
+                prompt,
+                ws_key,
+                ws_path,
+                context_prefix=context_prefix,
+                on_progress=claude_progress,
+            )
             ctx.cost_tracker.add(result.total_cost_usd, user_id)
             if result.exit_code != 0:
                 error_detail = result.stderr.strip() or result.stdout.strip() or "Unknown error"
@@ -234,6 +250,7 @@ async def handle_prompt(
                 platform="web",
                 max_attempts=2,
                 on_status=web_fix_status,
+                context_prefix=context_prefix,
             )
             summary = format_loop_summary(fix_result)
             await ctx.send(channel, summary)
