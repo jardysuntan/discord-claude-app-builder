@@ -1404,7 +1404,7 @@ async def export_ipa(archive_path: str, workspace_path: str, team_id: str) -> tu
         "-exportOptionsPlist", str(plist_path),
         "-exportPath", str(export_dir),
         "-allowProvisioningUpdates",
-    ], timeout=300)
+    ], timeout=900)
 
     raw = out + err
     if rc != 0:

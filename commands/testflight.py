@@ -16,6 +16,7 @@ from typing import Callable, Awaitable, Optional
 import config
 from asc_api import ensure_app, poll_build_processing
 from platforms import iOSPlatform, export_ipa, testflight_upload, preflight_fix_ios, validate_ipa
+from helpers.error_reporter import report_error_and_fix
 
 
 async def _with_heartbeat(coro, on_status, label: str, interval: int = 30):
@@ -132,6 +133,11 @@ async def handle_testflight(
             f"❌ Archive failed:\n```\n{archive_result.error[:1200]}\n```",
             None,
         )
+        await report_error_and_fix(
+            title=f"/testflight archive failed ({workspace_key})",
+            detail=archive_result.error or "archive returned no error detail",
+            context=f"/testflight workspace={workspace_key} stage=archive team={team_id}",
+        )
         return TestFlightResult(success=False)
     archive_path = archive_result.output
     await on_status("Archive succeeded.", None)
@@ -144,6 +150,11 @@ async def handle_testflight(
     )
     if not ok:
         await on_status(f"❌ Export failed:\n```\n{ipa_or_error[:1200]}\n```", None)
+        await report_error_and_fix(
+            title=f"/testflight IPA export failed ({workspace_key})",
+            detail=f"Error: {ipa_or_error}\n\nRaw output:\n{(raw or '')[:3000]}",
+            context=f"/testflight workspace={workspace_key} stage=export bundle={bundle_id}",
+        )
         return TestFlightResult(success=False)
     ipa_path = ipa_or_error
     await on_status(f"IPA exported.", None)
@@ -156,6 +167,11 @@ async def handle_testflight(
     )
     if not valid:
         await on_status(f"❌ Validation failed:\n```\n{val_error[:1500]}\n```", None)
+        await report_error_and_fix(
+            title=f"/testflight validation failed ({workspace_key})",
+            detail=val_error or "validation returned no detail",
+            context=f"/testflight workspace={workspace_key} stage=validate bundle={bundle_id}",
+        )
         return TestFlightResult(success=False)
     await on_status("Validation passed.", None)
 
@@ -184,4 +200,9 @@ async def handle_testflight(
         return TestFlightResult(success=True)
     else:
         await on_status(upload_result.message, None)
+        await report_error_and_fix(
+            title=f"/testflight upload failed ({workspace_key})",
+            detail=upload_result.message or "upload returned no detail",
+            context=f"/testflight workspace={workspace_key} stage=upload bundle={bundle_id}",
+        )
         return TestFlightResult(success=False)
