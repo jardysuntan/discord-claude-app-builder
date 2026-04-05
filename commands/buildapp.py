@@ -10,13 +10,22 @@ import time
 from typing import Callable, Awaitable, Optional
 
 import config
+from agent_factory import get_provider_name
+from agent_protocol import AgentRunner
 from workspaces import WorkspaceRegistry
-from claude_runner import ClaudeRunner
 from agent_loop import run_agent_loop, format_loop_summary
 from commands.create import create_kmp_project
+from commands.planapp import generate_plan
 from platforms import AndroidPlatform, iOSPlatform, WebPlatform
 from supabase_client import run_sql, extract_sql
 from helpers.schema_manager import schema_name_for_workspace, ensure_schema, set_search_path_sql, ensure_dashboard_function
+from workspace_spec import (
+    build_workspace_spec,
+    format_spec_context,
+    load_workspace_spec,
+    save_workspace_spec,
+)
+from helpers.error_reporter import report_error_and_fix
 import glob
 import os
 
@@ -175,7 +184,7 @@ Instructions for the backend integration:
 async def handle_buildapp(
     description: str,
     registry: WorkspaceRegistry,
-    claude: ClaudeRunner,
+    claude: AgentRunner,
     on_status: Callable[[str, Optional[str]], Awaitable[None]],
     on_ask: Optional[Callable[[str], Awaitable[Optional[str]]]] = None,
     is_admin: bool = True,
@@ -240,6 +249,22 @@ async def handle_buildapp(
     if not ws_path:
         await on_status(f"❌ Could not find workspace `{slug}`.", None)
         return None
+
+    existing_spec = load_workspace_spec(ws_path)
+    plan = existing_spec.get("plan") if existing_spec else None
+    if not plan:
+        await on_status("🧭 Capturing an app spec for future model context...", None)
+        plan = await generate_plan(description, claude, workspace_key=f"{slug}-plan", workspace_path=ws_path)
+        if plan:
+            save_workspace_spec(
+                ws_path,
+                build_workspace_spec(
+                    app_name=plan.get("app_name", app_name),
+                    description=description,
+                    plan=plan,
+                    provider=get_provider_name(),
+                ),
+            )
 
     # 1.5a Create per-app Postgres schema for isolation
     app_schema = None
@@ -317,6 +342,18 @@ async def handle_buildapp(
         else:
             await on_status("⚠️ Could not extract SQL from schema response. Continuing without backend.", None)
 
+    save_workspace_spec(
+        ws_path,
+        build_workspace_spec(
+            app_name=app_name,
+            description=description,
+            plan=plan,
+            schema_sql=schema_sql,
+            db_schema=app_schema,
+            provider=get_provider_name(),
+        ),
+    )
+
     # 3. Claude builds features + auto-fix for Android first
     # Smart warnings: check if description implies backend but no Supabase creds
     if credentials is not None:
@@ -334,6 +371,8 @@ async def handle_buildapp(
 
     feature_prompt = build_feature_prompt(app_name, description, schema_sql=schema_sql,
                                           db_schema=app_schema, credentials=credentials)
+    spec = load_workspace_spec(ws_path)
+    context_prefix = format_spec_context(spec) if spec else ""
 
     async def loop_status(msg):
         await on_status(msg, None)
@@ -345,6 +384,7 @@ async def handle_buildapp(
         claude=claude,
         platform="android",
         on_status=loop_status,
+        context_prefix=context_prefix,
     )
 
     summary = format_loop_summary(loop_result)
@@ -361,6 +401,12 @@ async def handle_buildapp(
             f"Android build didn't succeed. Try `@{slug} <fix instructions>`.",
             None,
         )
+        loop_detail = format_loop_summary(loop_result)
+        await report_error_and_fix(
+            title=f"/buildapp android loop failed ({slug})",
+            detail=f"App: {app_name}\nDescription: {description[:300]}\n\n{loop_detail}",
+            context=f"/buildapp workspace={slug} stage=android-loop attempts={loop_result.total_attempts}",
+        )
         return slug
 
     # 4. Web build + auto-fix (so anyone can try it in browser — show first)
@@ -376,6 +422,7 @@ async def handle_buildapp(
         claude=claude,
         platform="web",
         on_status=loop_status,
+        context_prefix=context_prefix,
     )
     web_summary = format_loop_summary(web_loop)
     await on_status(web_summary, None)
@@ -422,6 +469,7 @@ async def handle_buildapp(
             claude=claude,
             platform="ios",
             on_status=loop_status,
+            context_prefix=context_prefix,
         )
         ios_loop_summary = format_loop_summary(ios_loop)
         await on_status(ios_loop_summary, None)
