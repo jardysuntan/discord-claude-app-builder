@@ -10,7 +10,8 @@ import json
 import re
 from typing import Optional
 
-from claude_runner import ClaudeRunner
+from agent_protocol import AgentRunner
+from workspace_spec import build_workspace_spec, save_workspace_spec
 
 
 PLAN_PROMPT = """You are an expert mobile app architect. Given the app description below,
@@ -139,9 +140,10 @@ def format_plan_embed(plan: dict) -> dict:
 
 async def generate_plan(
     description: str,
-    claude: ClaudeRunner,
+    claude: AgentRunner,
     workspace_key: str = "_planapp",
     workspace_path: str = "/tmp",
+    save_spec: bool = False,
 ) -> Optional[dict]:
     """Generate an app plan using Claude. Returns parsed plan dict or None."""
     prompt = PLAN_PROMPT.format(description=description)
@@ -154,6 +156,13 @@ async def generate_plan(
     if plan:
         # Preserve the original description
         plan["_original_description"] = description
+        if save_spec:
+            spec = build_workspace_spec(
+                app_name=plan.get("app_name", "Untitled"),
+                description=description,
+                plan=plan,
+            )
+            save_workspace_spec(workspace_path, spec)
     return plan
 
 
