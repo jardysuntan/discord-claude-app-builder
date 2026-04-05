@@ -20,6 +20,7 @@ from helpers.smoketest_runner import SmokeTestResult
 log = logging.getLogger(__name__)
 
 BOT_REPO = "/Users/jaredtanpersonal/bots/discord-claude-bridge"
+# Note: local directory is "discord-claude-bridge" but the GitHub repo is "discord-claude-app-builder".
 GITHUB_REMOTE = "jardysuntan/discord-claude-app-builder"
 
 
