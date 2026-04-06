@@ -1,8 +1,10 @@
 # discord-claude-app-builder
 
-A Discord bot that turns chat messages into cross-platform apps. Describe what you want, and it builds it — Android, iOS, and Web — all from your phone.
+Build, iterate, and ship cross-platform mobile apps entirely from Discord. Describe what you want in plain English, and the bot builds it — Android, iOS, and Web — complete with a database, real-time sync, and one-tap publishing to TestFlight and Google Play.
 
-**Integrating your own bot?** See the full **[API Documentation](API.md)** — includes auth, every endpoint, real-time webhook events, and code examples.
+No Xcode. No Android Studio. No terminal. Just chat.
+
+**Building your own client?** See the full **[API Documentation](API.md)**.
 
 <table>
   <tr>
@@ -21,54 +23,157 @@ A Discord bot that turns chat messages into cross-platform apps. Describe what y
   </tr>
 </table>
 
-## Quick Start
+## What makes this different
+
+Most app builders give you a web preview. This one gives you **real native apps** that run on phones and ship to app stores.
+
+- **From chat to App Store** — type a description, get a running app on all three platforms, publish to TestFlight or Google Play without leaving Discord
+- **Actually cross-platform** — Kotlin Multiplatform under the hood, not a web wrapper. Native performance on Android + iOS, WebAssembly on the web
+- **Native iOS option** — `/swiftui` converts the iOS layer to real SwiftUI for an app that feels native, not ported
+- **Auto-fix loop** — build errors get fed back to the AI automatically, up to 8 retries. Crash-on-launch detection catches runtime failures too
+- **Database included** — Supabase backend auto-provisioned per app with real-time sync via WebSocket
+- **Visual debugging** — paste a screenshot of a bug and the bot sees it, understands it, and fixes it
+- **Self-healing infrastructure** — when things break, the bot files a GitHub issue and opens a fix PR automatically
+
+## Quick start
 
 DM the bot:
 
 ```
-/buildapp a pomodoro timer with task categories
+/buildapp a pomodoro timer with task categories and a rest timer
 ```
 
-Wait a few minutes. You'll get a screenshot and a web link to try it immediately.
+Wait a few minutes. You get a web link to try it instantly, plus native builds for Android and iOS.
 
-Then iterate:
+Then iterate in natural language:
 
 ```
 @pomodoro add a dark mode toggle
 @pomodoro make the timer bigger with a circular progress bar
 ```
 
-See a bug? Paste a screenshot — the bot can see images and fix what it sees.
+See a bug? Paste a screenshot — the bot reads images and fixes what it sees.
 
-Run `/demo` to preview, `/save` to checkpoint, `/testflight` or `/playstore` to publish.
+When you're happy:
 
-That's it. No code, no setup, no installs.
+```
+/testflight    → publishes to iOS TestFlight
+/playstore     → publishes to Google Play
+```
+
+That's it.
 
 ## Commands
 
+### Build and preview
+
 | Command | What it does |
 |---------|-------------|
-| `/buildapp <description>` | Build a full app from a description |
-| `@appname <request>` | Change your app with natural language |
-| `/demo` | Build and preview (screenshot + web link) |
-| `/save` | Save your progress (undo with `/save list`) |
-| `/testflight` | Publish to iOS TestFlight |
-| `/playstore` | Publish to Google Play |
-| `/ls` | List and switch apps |
-| `/help` | Full command reference |
+| `/buildapp <description>` | Full pipeline: scaffold, build, auto-fix, demo |
+| `/planapp <description>` | Plan first — screens, data model, features — before building |
+| `/demo [web\|android\|ios]` | Build and preview (screenshot + web link) |
+| `/build [android\|ios\|web]` | Build a specific platform target |
+| `/appraise` | AI quality review against app store guidelines |
 
-**More:** [`/rename`](#all-commands) [`/spend`](#all-commands) [`/run`](#all-commands) [`/status`](#all-commands) [`/diff`](#all-commands) [`/commit`](#all-commands) [`/pr`](#all-commands) — see [All Commands](#all-commands)
+### Chat with your app
+
+| Command | What it does |
+|---------|-------------|
+| `@appname <request>` | Make changes to a specific app |
+| *just type a message* | Chat about the currently active app |
+| *paste an image* | Bot sees screenshots — show it bugs or design mockups |
+
+### Publish
+
+| Command | What it does |
+|---------|-------------|
+| `/testflight` | Archive, sign, and upload to iOS TestFlight |
+| `/playstore` | Build AAB and upload to Google Play internal testing |
+| `/swiftui` | Convert iOS layer to native SwiftUI (admin) |
+
+### Manage workspaces
+
+| Command | What it does |
+|---------|-------------|
+| `/ls` | List all apps, switch between them |
+| `/use <name>` | Switch to a workspace |
+| `/rename <new name>` | Rename current app |
+| `/remove <name>` | Delete an app |
+
+### Save and version control
+
+| Command | What it does |
+|---------|-------------|
+| `/save` | Checkpoint your work |
+| `/save <message>` | Save with a custom description |
+| `/save list` | Browse save history, restore any version |
+| `/save undo` / `redo` | Quick undo/redo |
+| `/save github` | Push to GitHub (admin) |
+| `/status` `/diff` `/commit` `/log` `/pr` | Full git workflow (admin) |
+
+### Data
+
+| Command | What it does |
+|---------|-------------|
+| `/data export` | Download all database tables as CSV |
+| `/data template` | Get empty CSV templates to fill in |
+| `/data import` | Bulk-import a CSV file |
+
+### Tools and admin
+
+| Command | What it does |
+|---------|-------------|
+| `/spend` | Daily budget and usage |
+| `/history` | Build history, fix loops, cost tracking |
+| `/analytics` | TestFlight, Play Store, and build health metrics |
+| `/allow @user` | Grant bot access |
+| `/collaborate <ws> <name> <email>` | Invite a collaborator to a workspace |
+| `/run <cmd>` | Run a shell command in the workspace (admin) |
+| `/help` | Full command reference |
 
 ## Tips
 
-- **Be specific.** "A workout tracker with sets/reps logging and a rest timer" beats "a fitness app."
-- **Iterate small.** Build the core first, then add features one at a time.
-- **Share screenshots.** Paste an image of a bug or a design mockup — the bot reads images.
-- **Save often.** `/save` frequently so you can roll back with `/save list`.
+- **Be specific.** "A workout tracker with sets/reps logging, a rest timer, and exercise categories" beats "a fitness app."
+- **Iterate small.** Build the core first, then add features one prompt at a time.
+- **Paste screenshots.** The bot reads images — show it bugs, design mockups, or reference apps.
+- **Save often.** `/save` creates undo points. Use `/save list` to roll back if something breaks.
+- **Use `/planapp` first** for complex apps. It generates a structured plan (screens, data model, navigation) that guides the build.
+
+## How it works
+
+```
+You (Discord) ──→ Parser ──→ Bot ──→ Handler
+                                       │
+                               Claude Code CLI ←──→ AI (reads + writes code)
+                                       │
+                               Agent Loop (build → error → fix → retry)
+                                       │
+                               Platforms (Gradle / Xcode / WebAssembly)
+                                       │
+                               Screenshots, web server, device install
+```
+
+**Under the hood:**
+
+1. **You describe what you want** in Discord (text, images, or both)
+2. **Claude writes Kotlin Multiplatform code** — shared business logic + Compose UI
+3. **The agent loop compiles it** for Android, Web, and iOS. If the build fails, the error is fed back to Claude, which fixes it and retries (up to 8 times)
+4. **Crash detection** — if the app compiles but crashes on launch, the bot catches it, reads the crash log, and auto-fixes
+5. **You see a preview** — web URL you can open anywhere, plus native screenshots from emulator/simulator
+6. **You iterate** — every message adds to the conversation. Claude remembers what it built and evolves the app incrementally
+7. **You publish** — `/testflight` handles the entire Apple signing + upload flow. `/playstore` builds a signed AAB and uploads to Google Play
+
+**Auto-fix in action:**
+
+The bot doesn't just build — it watches for failures at every stage and automatically tries to fix them. If it can't fix an issue after multiple attempts, it files a GitHub issue with full error context and spawns a background agent to open a fix PR.
+
+**Native SwiftUI (optional):**
+
+By default, iOS apps use Compose Multiplatform (shared UI with Android). Run `/swiftui` to convert the iOS layer to native SwiftUI — SF Symbols, NavigationStack, native sheets, native scroll physics — while keeping the shared Kotlin business logic. The result feels like a hand-written iOS app.
 
 ---
 
-*Everything below is for self-hosting or contributing to the bot.*
+*Everything below is for self-hosting or contributing.*
 
 ## Setup
 
@@ -98,7 +203,6 @@ DISCORD_BOT_TOKEN=your-bot-token
 DISCORD_ALLOWED_USER_ID=your-discord-user-id
 BASE_PROJECTS_DIR=~/Projects
 CLAUDE_BIN=claude
-AGENT_PROVIDER=claude
 ```
 
 **Run:**
@@ -109,198 +213,135 @@ pm2 start ecosystem.config.cjs   # recommended — auto-restarts
 ```
 
 <details>
-<summary><b>Platform-specific setup (iOS, TestFlight, Tailscale, Supabase)</b></summary>
+<summary><b>iOS / TestFlight setup</b></summary>
 
-**iOS:**
 ```bash
 sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 sudo xcodebuild -license accept
-```
 
-**TestFlight** (requires Apple Developer Program, $99/yr):
-```bash
+# TestFlight (requires Apple Developer Program, $99/yr):
 export APPLE_TEAM_ID=your-team-id
 export ASC_KEY_ID=your-key-id
 export ASC_ISSUER_ID=your-issuer-id
 # Place .p8 at ~/.private_keys/AuthKey_<KEY_ID>.p8
 ```
 
-**Tailscale** (optional, for remote access):
-```bash
-export TAILSCALE_HOSTNAME=100.x.x.x
-```
+</details>
 
-**Supabase** (optional, auto-provisions databases):
+<details>
+<summary><b>Supabase (auto-provisions databases per app)</b></summary>
+
 ```bash
 SUPABASE_PROJECT_REF=your-project-ref
 SUPABASE_MANAGEMENT_KEY=your-management-key
 SUPABASE_ANON_KEY=your-anon-key
 ```
 
+Each `/buildapp` run gets its own isolated Postgres schema. Tables are designed by the AI based on the app description. Real-time sync via WebSocket is set up automatically.
+
+</details>
+
+<details>
+<summary><b>Google Play setup</b></summary>
+
+```bash
+PLAY_JSON_KEY_PATH=path/to/service-account.json
+```
+
+Requires a Google Play Developer account ($25 one-time) and a service account with Google Play Developer API access. The first APK must be uploaded manually; after that `/playstore` handles everything.
+
 </details>
 
 ## Architecture
-
-```
-Discord DM → parser.py → bot.py → handler
-                                     ↓
-                             claude_runner.py ←→ Claude Code CLI
-                                     ↓
-                             agent_loop.py (build → error → fix → retry)
-                                     ↓
-                             platforms.py (gradle / xcodebuild / wasm)
-                                     ↓
-                             Screenshots, web server, device install
-```
-
-**Key design:**
-- Claude sessions persist per workspace — context carries over between prompts
-- Workspace specs persist product intent in `.bridge/workspace_spec.json` so future LLM backends can reuse plan/schema context
-- Auto-fix loop — build errors get fed back to Claude (up to 8 retries)
-- Crash detection — iOS/Android demos detect crash-on-launch and auto-fix
-- Fix memory — every error+fix is logged and injected into future fix prompts
-- Image input — Discord image attachments are saved to the workspace and read by Claude
-- Web screenshots — Playwright captures a preview after every web build
 
 <details>
 <summary><b>Project structure</b></summary>
 
 ```
 bot.py                  # Entry point — Discord client, message routing
-parser.py               # Message grammar — slash commands + @workspace prompts
-config.py               # Environment variables
+parser.py               # 48 slash commands + @workspace prompt parsing
+config.py               # Environment variables and validation
 platforms.py            # Build/install/demo for Android, iOS, Web
-claude_runner.py        # Claude Code CLI with session continuity + progress streaming
+claude_runner.py        # Claude Code CLI wrapper with session persistence
 agent_loop.py           # Auto-fix loop: build → error → Claude fix → rebuild
-bot_context.py          # Shared context + message splitting
-workspaces.py           # Workspace registry (JSON-backed)
+agent_protocol.py       # Provider-agnostic agent runner contract
+agent_factory.py        # Runner selection (Claude default, extensible)
+workspaces.py           # Workspace registry (JSON-backed, per-user)
+workspace_spec.py       # Persistent product specs (.bridge/workspace_spec.json)
 supabase_client.py      # Supabase Management API client
+asc_api.py              # App Store Connect API client
+play_api.py             # Google Play Developer API client
 handlers/
   prompt_handler.py     # Core prompt flow (images, Claude, auto-build, preview)
   build_commands.py     # /buildapp, /demo, /platform
-  save_git_commands.py  # /save, git commands
-  workspace_commands.py # /ls, /use, /rename, /help
   publish_commands.py   # /testflight, /playstore
-  system_commands.py    # /spend, /setup, /health, /admin
+  swiftui_commands.py   # /swiftui (native iOS conversion)
+  workspace_commands.py # /ls, /use, /rename, /help
+  save_git_commands.py  # /save, git operations
+  admin_commands.py     # /allow, /setcap, /run, /invite
+  system_commands.py    # /spend, /health, /analytics, /setup
+  data_commands.py      # /data export, import, template
 helpers/
+  error_reporter.py     # Auto-file GitHub issues + async fix PRs
   demo_runner.py        # Platform demo orchestration
+  autofix.py            # Auto-fix PR on smoke test failure
   web_screenshot.py     # Playwright headless screenshots
   smoketest_runner.py   # Multi-scenario smoke test engine
-  api_smoketest.py      # API endpoint smoke tests
-  autofix.py            # Auto-fix PR on smoke test failure
-  pro_tips.py           # Pro tips embed + dismiss
-  ui_helpers.py         # Help text, workspace footer
 commands/
-  create.py             # Project scaffolding + CLAUDE.md template
-  buildapp.py           # /buildapp full pipeline
-  smoketest.py          # /smoketest command + standalone CLI
-  git_cmd.py            # Git operations
-  testflight.py         # iOS TestFlight upload
-  playstore.py          # Google Play upload
-  queue.py              # Batch task queue
-api.py                  # REST API server (port 8100)
-templates/
-  kmp/KMPTemplate/      # KMP project template (copied per new app)
+  buildapp.py           # Full build pipeline with context-aware prompts
+  swiftui.py            # SKIE setup + Compose-to-SwiftUI conversion
+  testflight.py         # iOS archive, export, validate, upload
+  playstore.py          # Android AAB build + Google Play upload
+  analytics.py          # TestFlight, Play Store, build health metrics
+  create.py             # KMP project scaffolding
+  planapp.py            # Structured app planning
+api.py                  # REST API (port 8100, 26 endpoints)
 ```
 
 </details>
 
-## Smoke Tests
+## Smoke tests
 
-Automated smoke tests verify the full buildapp pipeline end-to-end. Three scenarios are available:
+Automated end-to-end tests verify the full pipeline works. Three scenarios:
 
 | Scenario | What it builds |
 |----------|---------------|
 | `counter` | Counter app with increment/decrement/reset buttons |
-| `map` | Location finder with Leaflet.js map and coffee shop markers |
+| `map` | Location finder with Leaflet.js map and markers |
 | `video` | TikTok-style vertical video feed with play/pause |
 
-Each scenario runs the full pipeline: scaffold → Claude code gen → Android build → Web build → screenshot.
-
 ```bash
-# Run a single scenario
-python -m commands.smoketest --scenario counter
-
-# Run all scenarios
-python -m commands.smoketest --scenario all
-
-# Run API endpoint tests only
-python -m commands.smoketest --api
-
-# Run everything (nightly default)
-python -m commands.smoketest --scenario all --api
+python -m commands.smoketest --scenario counter   # single scenario
+python -m commands.smoketest --scenario all        # all scenarios
+python -m commands.smoketest --api                 # API endpoint tests
 ```
 
-From Discord (admin only): `/smoketest`
-
-On failure, the autofix system automatically creates a PR with a Claude-generated fix attempt.
+On failure, the bot automatically files a GitHub issue and opens a fix PR.
 
 A nightly cron runs `scripts/nightly-smoketest.sh` and posts results to the `#smoke-tests` channel.
 
 ## API
 
-A private REST API runs alongside the bot on port 8100 for programmatic access to all bot functionality.
+A REST API runs on port 8100 for programmatic access to all bot functionality.
 
-**Auth:** Bearer token (auto-generated on first run, stored in `.api-token`).
-
-**Base URL:** `http://localhost:8100/api/v1`
+**Auth:** Bearer token (auto-generated, stored in `.api-token`).
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/health` | Health check (no auth) |
 | `POST` | `/buildapp` | Build a full app from a description |
 | `GET` | `/builds/{build_id}` | Poll build status |
-| `POST` | `/planapp` | Generate an app plan from a description |
+| `POST` | `/planapp` | Generate an app plan |
 | `GET` | `/workspaces` | List all workspaces |
-| `GET` | `/workspaces/{slug}` | Get workspace details |
-| `PATCH` | `/workspaces/{slug}` | Rename workspace |
-| `DELETE` | `/workspaces/{slug}` | Delete workspace |
+| `GET` | `/workspaces/{slug}` | Workspace details |
 | `POST` | `/workspaces/{slug}/prompt` | Send a prompt to Claude |
-| `POST` | `/workspaces/{slug}/build` | Build for a specific platform |
+| `POST` | `/workspaces/{slug}/build` | Build for a platform |
 | `POST` | `/workspaces/{slug}/demo` | Run a demo |
 | `POST` | `/workspaces/{slug}/save` | Save workspace |
-| `POST` | `/workspaces/{slug}/use` | Switch active workspace |
-| `POST` | `/workspaces/{slug}/newsession` | Reset Claude session |
-| `POST` | `/workspaces/{slug}/appraise` | Run quality appraisal |
+| `POST` | `/workspaces/{slug}/appraise` | Quality appraisal |
 | `GET` | `/workspaces/{slug}/git/status` | Git status |
-| `GET` | `/workspaces/{slug}/git/diff` | Git diff |
-| `GET` | `/workspaces/{slug}/git/log` | Git log |
 | `POST` | `/workspaces/{slug}/git/commit` | Commit changes |
-| `POST` | `/workspaces/{slug}/git/undo` | Revert last commit |
-| `POST` | `/workspaces/{slug}/git/branch` | List/create branches |
-| `POST` | `/workspaces/{slug}/git/stash` | Stash/pop changes |
-| `GET` | `/workspaces/{slug}/saves` | List save history |
-| `POST` | `/workspaces/{slug}/saves/undo` | Undo last save |
 
-Interactive docs at `http://localhost:8100/api/docs` when the server is running.
-
-> **Note:** The API is currently private (localhost only). Public access is planned for a future release.
-
-## All Commands
-
-| Command | What it does |
-|---------|-------------|
-| `/buildapp <description>` | Full pipeline: scaffold → build → demo |
-| `@workspace <prompt>` | Send a prompt to Claude in that project |
-| `/demo [web\|android\|ios]` | Build + preview (default: web) |
-| `/save` | Save with auto-generated description |
-| `/save <message>` | Save with custom description |
-| `/save list` | Browse saves, restore any version |
-| `/save undo` / `redo` | Quick undo/redo |
-| `/save github` | Push to GitHub |
-| `/testflight` | Upload to iOS TestFlight |
-| `/playstore` | Upload to Google Play |
-| `/ls` | List and switch workspaces |
-| `/use <name>` | Switch workspace |
-| `/rename <new name>` | Rename current workspace |
-| `/remove <name>` | Delete a workspace |
-| `/spend` | Daily budget and usage |
-| `/platform [web\|ios\|android]` | Set default demo platform |
-| `/status` `/diff` `/commit` `/log` `/pr` | Git workflow |
-| `/run <cmd>` | Run shell command in workspace |
-| `/collaborate <ws> <name> <email>` | Invite collaborator |
-| `/maintenance [msg\|off]` | Toggle maintenance mode |
-| `/help` | Full command reference |
+Full spec: `http://localhost:8100/api/docs` (interactive Swagger UI when running).
 
 ## License
 
