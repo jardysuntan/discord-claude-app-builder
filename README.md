@@ -9,7 +9,7 @@ No Xcode. No Android Studio. No terminal. Just chat.
 <table>
   <tr>
     <td align="center">
-      <img src="https://github.com/user-attachments/assets/4d1a97e5-fe18-4b71-97bd-db494078c1be" width="350"/>
+      <img src="docs/jabluehq-preview.png" width="350"/>
     </td>
     <td align="center">
       <img src="https://github.com/user-attachments/assets/db6b4b82-d410-4bcb-9f66-3b0f5fcfe6b9" width="350"/>
