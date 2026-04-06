@@ -21,6 +21,7 @@ from handlers import (
     data_commands,
     integrate_commands,
     syncdoc_commands,
+    swiftui_commands,
 )
 
 COMMAND_HANDLERS = {
@@ -35,4 +36,5 @@ COMMAND_HANDLERS = {
     **data_commands.HANDLERS,
     **integrate_commands.HANDLERS,
     **syncdoc_commands.HANDLERS,
+    **swiftui_commands.HANDLERS,
 }

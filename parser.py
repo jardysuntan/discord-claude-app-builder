@@ -99,6 +99,9 @@ def parse(text: str) -> ParseResult:
             case "/testflight":
                 return Command(name="testflight")
 
+            case "/swiftui":
+                return Command(name="swiftui")
+
             case "/playstore":
                 return Command(name="playstore")
 
