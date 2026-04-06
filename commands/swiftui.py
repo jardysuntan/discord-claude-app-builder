@@ -162,11 +162,37 @@ File structure:
 - Focus on getting the main UI right with real data flowing from Kotlin.
 - Include all necessary imports at the top (SwiftUI, ComposeApp)
 
+REALTIME / WEBSOCKET:
+- The app likely has a realtime WebSocket connection (e.g., SupabaseRealtime).
+  Look for `startRealtime(scope)` in the Kotlin code.
+- If it exists, check if AppDependencies has a `startRealtime()` convenience
+  (no CoroutineScope param). If not, add one to AppDependencies.kt that uses MainScope().
+  This is the ONE Kotlin file you may modify — only to add a startRealtime() wrapper.
+- Call it in the SwiftUI ViewModel's start() method after loadConfig().
+- Add a 10-second polling fallback (Task.sleep + loadConfig loop) in case
+  WebSocket doesn't connect in all environments.
+
+MAPS:
+- If the Compose app uses HTML/Leaflet WebView maps, replace with native MapKit.
+- Use MKMapView via UIViewRepresentable (not SwiftUI Map which needs iOS 17 for full features).
+- import MapKit at the top of ContentView.swift.
+- Venue coordinates come from Kotlin model `latitude`/`longitude` — access via `.doubleValue`.
+
+SHEETS AND LIVE DATA:
+- When presenting data in a .sheet, pass the @ObservedObject ViewModel, NOT a frozen
+  config snapshot. Sheets with `let config: AppConfig` won't update when backend data changes.
+- Use .onChange(of: vm.config?.lastUpdated) to trigger re-sync inside sheets.
+
+TAB CONSOLIDATION:
+- iOS shows max 5 tabs before auto-collapsing to "More" (which is ugly and not customizable).
+- If the Compose app has 6+ bottom nav tabs, combine related ones into an "Activities"
+  or similar tab with a segmented Picker inside.
+
 IMPORTANT CONSTRAINTS:
-- Do NOT modify any Kotlin code. Only write Swift.
+- Do NOT modify any Kotlin code EXCEPT AppDependencies.kt (only to add startRealtime wrapper).
 - Do NOT touch any Gradle files.
 - Write ONLY to iosApp/iosApp/ContentView.swift.
-- Make sure to `import ComposeApp` at the top of ContentView.swift to access SKIE-bridged Kotlin types.
+- Make sure to `import ComposeApp` and `import MapKit` at the top of ContentView.swift.
 
 Now read the Compose source files and generate the SwiftUI equivalent.
 """
