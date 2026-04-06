@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 import config
 from commands.swiftui import handle_swiftui
+from helpers.demo_runner import run_demo
 
 if TYPE_CHECKING:
     from bot_context import BotContext
@@ -60,8 +61,12 @@ async def handle_swiftui_cmd(
             channel,
             f"✅ **{ws_key}** iOS layer converted to SwiftUI!\n\n"
             f"{result.message}\n\n"
+            "Launching iOS demo...",
+        )
+        await run_demo(ctx, channel, ws_key, ws_path, "ios")
+        await ctx.send(
+            channel,
             "**Next steps:**\n"
-            "• `/demo ios` — launch in the simulator to see the native SwiftUI UI\n"
             "• `/testflight` — publish to TestFlight\n"
             "• Send a prompt like `@workspace adjust the SwiftUI colors` to refine",
         )
