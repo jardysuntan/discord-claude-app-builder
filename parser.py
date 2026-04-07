@@ -97,13 +97,16 @@ def parse(text: str) -> ParseResult:
                 return Command(name="integrate", raw_cmd=rest or None)
 
             case "/testflight":
-                return Command(name="testflight")
+                return Command(name="testflight", raw_cmd=rest or None)
 
             case "/swiftui":
                 return Command(name="swiftui")
 
             case "/playstore":
-                return Command(name="playstore")
+                return Command(name="playstore", raw_cmd=rest or None)
+
+            case "/publish":
+                return Command(name="publish", raw_cmd=rest or None)
 
             case "/appname":
                 return Command(name="appname", raw_cmd=rest)
