@@ -1,6 +1,6 @@
 """
 handlers/build_commands.py — Build, demo, and related commands
-(buildapp, platform, demo).
+(buildapp, build-parallel, platform, demo).
 """
 
 from __future__ import annotations
@@ -112,8 +112,64 @@ async def handle_demo(ctx: BotContext, cmd: Command, channel, user_id: int, is_a
             await run_demo(ctx, channel, ws_key, ws_path, platform)
 
 
+async def handle_build_parallel(ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool) -> None:
+    if not config.AGENT_MODE:
+        await ctx.send(channel, "🔒 Agent mode OFF.")
+        return
+
+    ws_key, ws_path = ctx.registry.resolve(None, user_id)
+    if not ws_path:
+        await ctx.send(channel, "❌ No workspace set. Use `/buildapp` first.")
+        return
+    if not ctx.registry.can_access(ws_key, user_id, is_admin):
+        await ctx.send(channel, "You don't have access to that workspace.")
+        return
+
+    from commands.build_parallel import (
+        handle_build_parallel as _do_parallel,
+        format_parallel_summary,
+        PLATFORM_AGENTS,
+    )
+
+    # Determine platforms from command arg or defaults
+    platforms = None
+    if cmd.platform and cmd.platform != "all":
+        platforms = [cmd.platform]
+
+    # Parent status callback
+    async def on_status(msg, _img=None):
+        await ctx.send(channel, msg)
+
+    # Thread factory: create a Discord thread under the channel and return a callback
+    parent_msg = await channel.send(
+        f"🚀 **Parallel build** starting for **{ws_key}**..."
+    )
+
+    async def create_thread(name: str):
+        thread = await parent_msg.create_thread(name=name)
+
+        async def thread_status(msg: str):
+            await thread.send(msg[:config.MAX_DISCORD_MSG_LEN])
+
+        return thread_status
+
+    result = await _do_parallel(
+        workspace_key=ws_key,
+        workspace_path=ws_path,
+        claude=ctx.claude,
+        on_status=on_status,
+        create_thread=create_thread,
+        is_admin=is_admin,
+        platforms=platforms,
+    )
+
+    summary = format_parallel_summary(result)
+    await ctx.send(channel, summary)
+
+
 HANDLERS = {
     "buildapp": handle_buildapp,
+    "build-parallel": handle_build_parallel,
     "platform": handle_platform,
     "demo": handle_demo,
 }
