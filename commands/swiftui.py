@@ -217,6 +217,17 @@ async def handle_swiftui(
                     "Only KMP workspaces with an iOS target can be converted.",
         )
 
+    # Guard: don't overwrite hand-maintained SwiftUI code
+    content_view = root / "iosApp" / "iosApp" / "ContentView.swift"
+    if content_view.exists() and content_view.stat().st_size > 5000:
+        return SwiftUIResult(
+            success=False,
+            message="This workspace already has a SwiftUI layer "
+                    f"(`ContentView.swift` is {content_view.stat().st_size // 1000}KB). "
+                    "`/swiftui` would overwrite it from scratch.\n\n"
+                    "Use `/fix-ios <description>` to make targeted edits instead.",
+        )
+
     # ── Step 1: Add SKIE to Gradle (idempotent) ────────────────────────────
     await on_status("Step 1/4: Adding SKIE plugin for Kotlin-Swift interop...")
     changes = _add_skie_to_gradle(workspace_path)
