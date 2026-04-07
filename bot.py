@@ -213,6 +213,23 @@ async def on_message(message: discord.Message):
         return
 
     cmd = parsed
+
+    # Save image attachments for commands that need them (e.g. /build-from-design)
+    if cmd.name == "build_from_design" and message.attachments:
+        _IMG_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+        ws_key, ws_path = registry.resolve(None, user_id)
+        if ws_path:
+            upload_dir = Path(ws_path) / "_discord_uploads"
+            upload_dir.mkdir(exist_ok=True)
+            saved = []
+            for att in message.attachments:
+                ext = Path(att.filename).suffix.lower()
+                if ext in _IMG_EXTS:
+                    dest = upload_dir / att.filename
+                    await att.save(dest)
+                    saved.append(str(dest))
+            cmd._image_paths = saved
+
     handler = COMMAND_HANDLERS.get(cmd.name)
     if handler:
         try:
