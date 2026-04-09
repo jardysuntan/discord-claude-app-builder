@@ -122,3 +122,56 @@ def build_visual_diff_prompt(
         )
 
     return "\n".join(lines)
+
+
+def build_annotation_prompt(
+    annotated_image_paths: list[str],
+    original_screenshot_paths: list[str],
+    bot_screenshot_path: str | None,
+) -> str:
+    """Return a prompt for annotated-screenshot visual design feedback.
+
+    *annotated_image_paths* — images the user drew on (circles, arrows, text).
+    *original_screenshot_paths* — the original bot screenshot(s) the user replied to.
+    *bot_screenshot_path* — fresh screenshot of the app's current state (may be None).
+    """
+    lines: list[str] = []
+
+    lines.append("## Visual Design Mode — Annotated Screenshot Feedback\n")
+
+    lines.append(
+        "The user replied to a screenshot with annotated image(s). They drew on "
+        "the screenshot using circles, arrows, highlights, or text to indicate "
+        "exactly which parts of the UI they want changed.\n"
+    )
+
+    lines.append("**Annotated image(s) from the user** (read these files):\n")
+    for p in annotated_image_paths:
+        lines.append(f"  - {p}")
+
+    if original_screenshot_paths:
+        lines.append("\n**Original screenshot(s) the user annotated on** (read these files):\n")
+        for p in original_screenshot_paths:
+            lines.append(f"  - {p}")
+
+    if bot_screenshot_path:
+        lines.append(
+            f"\n**Current live app state** (auto-captured):\n"
+            f"  - {bot_screenshot_path}\n"
+        )
+
+    lines.append(
+        "\n**Instructions:**\n"
+        "1. Compare the annotated image against the original screenshot to identify "
+        "every annotation the user added — circles, arrows, text labels, highlights, "
+        "crossed-out areas, or drawn shapes.\n"
+        "2. For each annotation, determine the spatial region it targets and what "
+        "change the user is requesting (e.g. an arrow pointing to a button with "
+        "text \"make bigger\", a circle around misaligned elements, etc.).\n"
+        "3. Generate targeted, scoped code changes for each annotated region. "
+        "Only modify the UI components that correspond to the annotated areas.\n"
+        "4. If the user wrote text on the annotation, treat it as an explicit "
+        "instruction for that area."
+    )
+
+    return "\n".join(lines)
