@@ -45,44 +45,6 @@ def get_plan(user_id: int) -> dict | None:
     return plans.get(str(user_id))
 
 
-def _plan_to_editable_text(plan: dict) -> str:
-    """Convert a plan dict into human-readable text for editing in the modal."""
-    lines = []
-    if plan.get("app_name"):
-        lines.append(f"App: {plan['app_name']}")
-    if plan.get("summary"):
-        lines.append(plan["summary"])
-    lines.append("")
-
-    for s in plan.get("screens", []):
-        comps = ", ".join(s.get("key_components", []))
-        lines.append(f"Screen: {s['name']} — {s['description']}")
-        if comps:
-            lines.append(f"  Components: {comps}")
-
-    nav = plan.get("navigation", {})
-    if nav:
-        lines.append(f"\nNav: {nav.get('type', 'stack')} — {nav.get('flow', '')}")
-
-    for e in plan.get("data_model", []):
-        fields = ", ".join(e.get("fields", []))
-        lines.append(f"Data: {e['entity']} ({fields})")
-
-    features = plan.get("features", [])
-    if features:
-        lines.append("\nFeatures:")
-        for f in features:
-            lines.append(f"- {f}")
-
-    tech = plan.get("tech_decisions", [])
-    if tech:
-        lines.append("\nTech:")
-        for t in tech:
-            lines.append(f"- {t}")
-
-    return "\n".join(lines)[:4000]
-
-
 # ── Discord embed from plan ──────────────────────────────────────────────────
 
 def plan_embed(plan: dict) -> discord.Embed:
@@ -278,11 +240,90 @@ class _PlanActionView(discord.ui.View):
             self.ctx.registry.set_default(self.user_id, slug)
             await self.ctx.send(self.channel, f"📂 Switched to **{slug}**")
 
-    @discord.ui.button(label="Edit plan", style=discord.ButtonStyle.secondary, emoji="✏️")
+    @discord.ui.button(label="Refine plan", style=discord.ButtonStyle.secondary, emoji="✏️")
     async def replan(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
             return await interaction.response.send_message("Not your command.", ephemeral=True)
-        prefill = _plan_to_editable_text(self.plan)
         await interaction.response.send_modal(
-            _PlanAppModal(self.ctx, self.channel, self.user_id, self.is_admin, prefill)
+            _RefinePlanModal(self.ctx, self.channel, self.user_id, self.is_admin, self.plan)
         )
+
+
+# ── Modal: refine an existing plan with small changes ───────────────────────
+
+class _RefinePlanModal(discord.ui.Modal, title="Refine your plan"):
+    changes = discord.ui.TextInput(
+        label="What would you like to change?",
+        style=discord.TextStyle.long,
+        placeholder=(
+            "e.g. 'add a Settings screen', 'remove the spin wheel game', "
+            "'use Ktor instead of the Supabase SDK', 'rename app to MyTrip'"
+        ),
+        required=True,
+        max_length=2000,
+    )
+
+    def __init__(self, ctx: BotContext, channel, user_id: int, is_admin: bool, plan: dict):
+        super().__init__()
+        self.ctx = ctx
+        self.channel = channel
+        self.user_id = user_id
+        self.is_admin = is_admin
+        self.plan = plan
+
+    async def on_submit(self, interaction: discord.Interaction):
+        changes = self.changes.value.strip()
+
+        await interaction.response.defer()
+        status_msg = await self.channel.send(
+            f"✏️ **Refining the plan...**\n_Applying: {changes[:200]}_",
+        )
+
+        stop_event = asyncio.Event()
+
+        async def progress_ticker():
+            while not stop_event.is_set():
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=15.0)
+                    return
+                except asyncio.TimeoutError:
+                    try:
+                        await status_msg.edit(
+                            content=f"⏳ **Still refining...**\n_Applying: {changes[:200]}_",
+                        )
+                    except Exception:
+                        pass
+
+        ticker_task = asyncio.create_task(progress_ticker())
+
+        try:
+            updated = await planapp.refine_plan(self.plan, changes, self.ctx.claude)
+        finally:
+            stop_event.set()
+            try:
+                await ticker_task
+            except Exception:
+                pass
+
+        if not updated:
+            try:
+                await status_msg.edit(
+                    content="❌ Could not refine the plan. Try describing the changes differently.",
+                )
+            except Exception:
+                await self.ctx.send(
+                    self.channel,
+                    "❌ Could not refine the plan. Try describing the changes differently.",
+                )
+            return
+
+        _save_plan(self.user_id, updated)
+
+        try:
+            await status_msg.edit(content="✅ **Plan updated!**")
+        except Exception:
+            pass
+
+        embed = plan_embed(updated)
+        view = _PlanActionView(self.ctx, self.channel, self.user_id, self.is_admin, updated)
+        await self.channel.send(embed=embed, view=view)
