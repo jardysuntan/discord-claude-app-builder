@@ -4,6 +4,7 @@ views/planapp_views.py — Plan-app modal, embed, and approve/build buttons.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -121,25 +122,73 @@ class _PlanAppModal(discord.ui.Modal, title="Plan your app"):
 
     async def on_submit(self, interaction: discord.Interaction):
         desc = self.description.value.strip()
-        await interaction.response.send_message(
-            "🧠 Planning your app — this takes about 30 seconds...", ephemeral=True,
+
+        # Ack the modal immediately (required within 3s), then post a public status message
+        await interaction.response.defer()
+        status_msg = await self.channel.send(
+            "🧠 **Planning your app...**\n"
+            "_Analyzing requirements — this usually takes 30-60 seconds._",
         )
 
-        plan = await planapp.generate_plan(
-            desc, self.ctx.claude,
-        )
+        # Background task: periodically edit the status message so the user knows we're still alive
+        stop_event = asyncio.Event()
+
+        async def progress_ticker():
+            stages = [
+                ("🧭", "Designing navigation and screens..."),
+                ("🗄️", "Sketching the data model..."),
+                ("✨", "Finalizing features and tech stack..."),
+                ("⏳", "Almost done — polishing the plan..."),
+            ]
+            stage_idx = 0
+            while not stop_event.is_set():
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=12.0)
+                    return
+                except asyncio.TimeoutError:
+                    emoji, text = stages[min(stage_idx, len(stages) - 1)]
+                    try:
+                        await status_msg.edit(
+                            content=f"{emoji} **Planning your app...**\n_{text}_",
+                        )
+                    except Exception:
+                        pass
+                    stage_idx += 1
+
+        ticker_task = asyncio.create_task(progress_ticker())
+
+        try:
+            plan = await planapp.generate_plan(
+                desc, self.ctx.claude,
+            )
+        finally:
+            stop_event.set()
+            try:
+                await ticker_task
+            except Exception:
+                pass
 
         if not plan:
-            await self.ctx.send(
-                self.channel,
-                "❌ Could not generate a plan. Try again with a more detailed description.",
-            )
+            try:
+                await status_msg.edit(
+                    content="❌ Could not generate a plan. Try again with a more detailed description.",
+                )
+            except Exception:
+                await self.ctx.send(
+                    self.channel,
+                    "❌ Could not generate a plan. Try again with a more detailed description.",
+                )
             return
 
         # Store plan for this user
         _save_plan(self.user_id, plan)
 
-        # Send the plan embed with action buttons
+        # Replace status message with a "done" note, then post the plan embed
+        try:
+            await status_msg.edit(content="✅ **Plan ready!**")
+        except Exception:
+            pass
+
         embed = plan_embed(plan)
         view = _PlanActionView(self.ctx, self.channel, self.user_id, self.is_admin, plan)
         await self.channel.send(embed=embed, view=view)
