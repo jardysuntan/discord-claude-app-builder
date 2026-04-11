@@ -227,7 +227,9 @@ class _PlanActionView(discord.ui.View):
         async def ba_status(msg, fpath=None):
             await self.ctx.send(self.channel, msg, file_path=fpath)
 
-        slug = await ba_handle(
+        # handle_buildapp auto-switches the default workspace right after
+        # create_kmp_project, so callers don't need a post-build set_default.
+        await ba_handle(
             enriched_desc,
             self.ctx.registry,
             self.ctx.claude,
@@ -236,9 +238,6 @@ class _PlanActionView(discord.ui.View):
             owner_id=self.user_id,
             app_name=app_name,
         )
-        if slug:
-            self.ctx.registry.set_default(self.user_id, slug)
-            await self.ctx.send(self.channel, f"📂 Switched to **{slug}**")
 
     @discord.ui.button(label="Refine plan", style=discord.ButtonStyle.secondary, emoji="✏️")
     async def replan(self, interaction: discord.Interaction, button: discord.ui.Button):
