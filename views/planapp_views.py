@@ -103,6 +103,13 @@ def plan_embed(plan: dict) -> discord.Embed:
 # ── Modal: enter app description ─────────────────────────────────────────────
 
 class _PlanAppModal(discord.ui.Modal, title="Plan your app"):
+    app_name_input = discord.ui.TextInput(
+        label="App name (optional)",
+        style=discord.TextStyle.short,
+        placeholder="e.g. FridgeChef — leave blank to let the AI suggest one",
+        required=False,
+        max_length=60,
+    )
     description = discord.ui.TextInput(
         label="Describe your app idea",
         style=discord.TextStyle.long,
@@ -111,7 +118,8 @@ class _PlanAppModal(discord.ui.Modal, title="Plan your app"):
         max_length=4000,
     )
 
-    def __init__(self, ctx: BotContext, channel, user_id: int, is_admin: bool, prefill: str = ""):
+    def __init__(self, ctx: BotContext, channel, user_id: int, is_admin: bool,
+                 prefill: str = "", prefill_name: str = ""):
         super().__init__()
         self.ctx = ctx
         self.channel = channel
@@ -119,9 +127,12 @@ class _PlanAppModal(discord.ui.Modal, title="Plan your app"):
         self.is_admin = is_admin
         if prefill:
             self.description.default = prefill[:4000]
+        if prefill_name:
+            self.app_name_input.default = prefill_name[:60]
 
     async def on_submit(self, interaction: discord.Interaction):
         desc = self.description.value.strip()
+        user_app_name = (self.app_name_input.value or "").strip()
 
         # Ack the modal immediately (required within 3s), then post a public status message
         await interaction.response.defer()
@@ -180,6 +191,10 @@ class _PlanAppModal(discord.ui.Modal, title="Plan your app"):
                 )
             return
 
+        # Apply user-provided app name override if given
+        if user_app_name:
+            plan["app_name"] = user_app_name
+
         # Store plan for this user
         _save_plan(self.user_id, plan)
 
@@ -210,7 +225,7 @@ class PlanAppView(discord.ui.View):
         if interaction.user.id != self.user_id:
             return await interaction.response.send_message("Not your command.", ephemeral=True)
         await interaction.response.send_modal(
-            _PlanAppModal(self.ctx, self.channel, self.user_id, self.is_admin, self.prefill)
+            _PlanAppModal(self.ctx, self.channel, self.user_id, self.is_admin, prefill=self.prefill)
         )
 
 
