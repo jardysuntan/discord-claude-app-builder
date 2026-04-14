@@ -250,6 +250,14 @@ async def handle_buildapp(
         await on_status(f"❌ Could not find workspace `{slug}`.", None)
         return None
 
+    # Auto-switch the user's default workspace to the new app immediately
+    # (before the long build loop), so subsequent commands target this workspace
+    # and the user knows exactly where we are. Works for any caller (planapp,
+    # buildapp view, API, etc.) since the set_default lives inside buildapp itself.
+    if owner_id is not None:
+        if registry.set_default(owner_id, slug):
+            await on_status(f"📂 Switched to **{slug}**", None)
+
     existing_spec = load_workspace_spec(ws_path)
     plan = existing_spec.get("plan") if existing_spec else None
     if not plan:

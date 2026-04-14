@@ -98,14 +98,12 @@ class _BuildAppModal(discord.ui.Modal, title="Build a new app"):
             finally:
                 self.ctx.interview_pending.discard(pair)
 
-        slug = await buildapp.handle_buildapp(
+        # handle_buildapp auto-switches the default workspace inside the function
+        await buildapp.handle_buildapp(
             desc, self.ctx.registry, self.ctx.claude, ba_status,
             on_ask=ba_ask, is_admin=self.is_admin, owner_id=self.user_id,
             app_name=name,
         )
-        if slug:
-            self.ctx.registry.set_default(self.user_id, slug)
-            await self.ctx.send(self.channel, f"\U0001f4c2 Switched to **{slug}**")
 
 
 class _BuildAppView(discord.ui.View):
