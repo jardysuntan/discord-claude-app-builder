@@ -14,6 +14,58 @@ from agent_protocol import AgentRunner
 from workspace_spec import build_workspace_spec, save_workspace_spec
 
 
+REFINE_PROMPT = """You are an expert mobile app architect. A user has reviewed an existing
+app plan and wants changes. Update the plan according to their instructions and return
+the COMPLETE revised plan as JSON.
+
+Original description: {description}
+
+Current plan (JSON):
+{current_plan}
+
+User's requested changes:
+{changes}
+
+Output the COMPLETE updated plan as a single JSON object (no markdown fences, just raw JSON)
+using EXACTLY this structure:
+{{
+  "app_name": "SuggestedAppName",
+  "summary": "One-sentence summary of what the app does",
+  "screens": [
+    {{
+      "name": "Screen Name",
+      "description": "What this screen shows and does",
+      "key_components": ["Component1", "Component2"]
+    }}
+  ],
+  "navigation": {{
+    "type": "bottom_tabs | drawer | stack",
+    "flow": "Brief description of how users move between screens"
+  }},
+  "data_model": [
+    {{
+      "entity": "EntityName",
+      "fields": ["field1: Type", "field2: Type"],
+      "description": "What this entity represents"
+    }}
+  ],
+  "features": [
+    "Feature 1 description",
+    "Feature 2 description"
+  ],
+  "tech_decisions": [
+    "Decision 1",
+    "Decision 2"
+  ]
+}}
+
+Rules:
+- Apply the user's changes precisely
+- Preserve everything else from the current plan
+- Output ONLY the JSON object, no other text
+"""
+
+
 PLAN_PROMPT = """You are an expert mobile app architect. Given the app description below,
 generate a structured plan for a Kotlin Multiplatform (Compose Multiplatform) app.
 
@@ -164,6 +216,34 @@ async def generate_plan(
             )
             save_workspace_spec(workspace_path, spec)
     return plan
+
+
+async def refine_plan(
+    current_plan: dict,
+    changes: str,
+    claude: AgentRunner,
+    workspace_key: str = "_planapp",
+    workspace_path: str = "/tmp",
+) -> Optional[dict]:
+    """Refine an existing plan based on user-requested changes. Returns updated plan or None."""
+    description = current_plan.get("_original_description", "")
+    # Strip the _original_description from the JSON we show to Claude
+    plan_for_prompt = {k: v for k, v in current_plan.items() if not k.startswith("_")}
+    prompt = REFINE_PROMPT.format(
+        description=description,
+        current_plan=json.dumps(plan_for_prompt, indent=2),
+        changes=changes,
+    )
+    result = await claude.run(prompt, workspace_key, workspace_path)
+
+    if result.exit_code != 0:
+        return None
+
+    updated = parse_plan_json(result.stdout)
+    if updated:
+        # Preserve the original description
+        updated["_original_description"] = description
+    return updated
 
 
 def plan_to_buildapp_prompt(plan: dict) -> str:
