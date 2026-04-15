@@ -233,6 +233,54 @@ Build responses include `warnings` for missing capabilities:
 
 ---
 
+## Structured Extraction (LLM)
+
+### POST /api/v1/extract
+
+Extract structured JSON from a document using the caller's configured LLM key.
+Multi-provider: Anthropic, OpenAI, Google (Gemini), Groq, DeepSeek, Mistral, OpenRouter.
+Provider is auto-detected from the API key prefix (`sk-ant-*` → Anthropic, `gsk_*` → Groq, `AIza*` → Google, `sk-or-*` → OpenRouter, `sk-*`/`sk-proj-*` → OpenAI; DeepSeek/Mistral require explicit `provider`).
+
+**Prerequisite:** set an LLM credential first via `POST /api/v1/account/credentials/llm`.
+
+```bash
+curl -X POST http://localhost:8100/api/v1/extract \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "Trip to Paris June 10-15. Visiting Louvre and Eiffel Tower.",
+    "json_schema": {
+      "type": "object",
+      "properties": {
+        "trip": {"type": "object", "properties": {"destination": {"type": "string"}, "start_date": {"type": "string"}, "end_date": {"type": "string"}}},
+        "venues": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}}}}
+      }
+    }
+  }'
+```
+
+**Body:**
+- `text` (required) — the source document, as plain text. For PDF/markdown the caller must convert to text first.
+- `json_schema` (required) — JSON Schema the model should fill
+- `provider` (optional) — override auto-detection: `anthropic`, `openai`, `google`, `groq`, `deepseek`, `mistral`, `openrouter`
+- `model` (optional) — override provider default (e.g. `"claude-opus-4-6"`, `"gpt-4o-mini"`, `"gemini-2.0-flash"`, `"llama-3.3-70b-versatile"`)
+- `system_prompt` (optional) — override the default extractor prompt
+- `temperature` (optional) — default `0.1`
+
+**Success response (HTTP 200):**
+```json
+{"data": {"trip": {...}, "venues": [...]}, "provider": "anthropic", "model": "claude-haiku-4-5-20251001", "error": false}
+```
+
+**Error response (HTTP 200, `error: true`):**
+```json
+{"error": true, "error_message": "Anthropic 401: invalid x-api-key", "provider": "anthropic"}
+```
+
+Note: model errors return HTTP 200 with `error: true` (so callers don't auto-retry at the HTTP layer). Missing/invalid credentials return HTTP 400.
+
+---
+
 ## Build & Create Endpoints
 
 ### Build & Create

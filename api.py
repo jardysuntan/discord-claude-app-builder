@@ -189,6 +189,15 @@ class CreateKeyRequest(BaseModel):
 class WhitelistRequest(BaseModel):
     account_id: str
 
+class ExtractRequest(BaseModel):
+    """LLM-powered structured extraction from a document."""
+    text: str
+    json_schema: dict
+    provider: str | None = None   # override auto-detection (anthropic/openai/groq/google/...)
+    model: str | None = None      # override provider default
+    system_prompt: str | None = None
+    temperature: float = 0.1
+
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -290,6 +299,56 @@ async def delete_credential(cred_type: str, account: Account = Depends(get_curre
         "status": "deleted",
         "capabilities": mgr.get_capabilities(account.account_id),
     }
+
+
+@app.post("/api/v1/extract")
+async def extract_structured(req: ExtractRequest,
+                             account: Account = Depends(get_current_account)):
+    """
+    Extract structured JSON from a document using the caller's configured LLM key.
+
+    Auth: standard Bearer token (same as other endpoints).
+    LLM key: read from the account's `llm` credential (set via
+             POST /api/v1/account/credentials/llm). Provider is auto-detected
+             from the key prefix unless `provider` is passed explicitly.
+
+    Response on success: {"data": <obj matching json_schema>, "provider": "...", "model": "..."}
+    Response on error:   {"error": true, "error_message": "..."}
+    """
+    from llm_providers import extract_json, detect_provider, list_providers
+
+    mgr = _get_account_mgr()
+    cred = mgr.get_credential(account.account_id, "llm")
+    if not cred or not cred.get("api_key"):
+        raise HTTPException(
+            400,
+            "No LLM credential set. POST /api/v1/account/credentials/llm with "
+            '{"data": {"api_key": "sk-..."}} first.',
+        )
+    api_key = cred["api_key"]
+
+    provider = req.provider or detect_provider(api_key)
+    if not provider:
+        raise HTTPException(
+            400,
+            f"Could not auto-detect provider from key prefix. Pass 'provider' explicitly. "
+            f"Supported: {list_providers()}",
+        )
+
+    result = await extract_json(
+        api_key=api_key,
+        text=req.text,
+        json_schema=req.json_schema,
+        provider=provider,
+        model=req.model,
+        system_prompt=req.system_prompt,
+        temperature=req.temperature,
+    )
+    if result.get("error"):
+        # Return 200 with error body so callers can surface model errors without
+        # HTTP-level retries kicking in. Swap to raise if you prefer HTTP errors.
+        return result
+    return result
 
 
 @app.post("/api/v1/account/keys")
