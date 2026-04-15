@@ -160,7 +160,7 @@ class OpenRouterProvider(OpenAICompatProvider):
 
 class GoogleProvider(LLMProvider):
     name = "google"
-    default_model = "gemini-2.0-flash"
+    default_model = "gemini-2.5-flash"
     BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 
     async def query(self, model, messages, temperature=0.2, timeout=120.0, max_tokens=4096):
