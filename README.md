@@ -1,10 +1,8 @@
 # discord-claude-app-builder
 
-Build, iterate, and ship cross-platform mobile apps entirely from Discord. Describe what you want in plain English, and the bot builds it — Android, iOS, and Web — complete with a database, real-time sync, and one-tap publishing to TestFlight and Google Play.
+**Type an idea in Discord. Get a native app on the App Store.**
 
-No Xcode. No Android Studio. No terminal. Just chat.
-
-**Building your own client?** See the full **[API Documentation](API.md)**.
+Android, iOS, and Web from one chat command. Auto-fixing build loop. One-tap publish to TestFlight and Google Play. macOS required for iOS.
 
 <table>
   <tr>
@@ -22,6 +20,14 @@ No Xcode. No Android Studio. No terminal. Just chat.
     </td>
   </tr>
 </table>
+
+**And the bot improves itself.** Every app I ship by hand becomes a benchmark. A parallel bot-only copy gets built on every commit, an auditor diffs the two, and gaps become prompt-fix PRs against this repo. [WereSoBach](https://weresobach.com) is the first reference app — every future app I (or anyone) ships through this pipeline plugs into the same loop.
+
+Live dashboard: **[app-bot-diff-dashboard.pages.dev](https://app-bot-diff-dashboard.pages.dev)**
+
+*(Demo GIF coming soon.)*
+
+**Building your own client?** See the full **[API Documentation](API.md)**.
 
 ## What makes this different
 
@@ -320,11 +326,11 @@ On failure, the bot automatically files a GitHub issue and opens a fix PR.
 
 A nightly cron runs `scripts/nightly-smoketest.sh` and posts results to the `#smoke-tests` channel.
 
-## Bot learning loop
+## Bot learning loop (how it works)
 
-A live dashboard at **[app-bot-diff-dashboard.pages.dev](https://app-bot-diff-dashboard.pages.dev)** shows how well the bot generates apps compared against a hand-built reference app. Every commit to the reference repo triggers the bot to rebuild the same feature in a bot-only copy, then an auditor scans for missing patterns (auth, real-time sync, maps, games, etc.). Gaps open a draft PR here with suggested prompt improvements.
+Summarized at the top — this section covers the implementation. Every commit to a reference repo (currently [WereSoBach](https://weresobach.com)) triggers the bot to rebuild the same feature in a parallel bot-only copy. An auditor scans for missing patterns (auth, real-time sync, maps, games, etc.). Gaps open draft PRs here with suggested prompt improvements.
 
-The dashboard renders each commit as a CI/CD-style pipeline row: `Commit → Phase 2 sync → Bottest → Phase 3 audit → Gap PR`. Source in [`app-bot-diff-dashboard/`](app-bot-diff-dashboard/) — Cloudflare Pages static site plus a Pages Function proxying the GitHub API.
+The [dashboard](https://app-bot-diff-dashboard.pages.dev) renders each commit as a CI/CD-style pipeline row: `Commit → Phase 2 sync → Bottest → Phase 3 audit → Gap PR`. Source in [`app-bot-diff-dashboard/`](app-bot-diff-dashboard/) — Cloudflare Pages static site plus a Pages Function proxying the GitHub API.
 
 ## API
 
