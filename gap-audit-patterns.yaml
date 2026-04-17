@@ -1,0 +1,144 @@
+# Gap-audit patterns — curated list of features the bot must implement on weresobachbottest
+# to match WereSoBach (north-star) capabilities.
+#
+# Each pattern checks whether bottest contains known fingerprints of a feature.
+# When a pattern fails, the gap-auditor opens a draft PR on discord-claude-app-builder
+# (this repo) appending the finding to gap-audit-log.md so the bot's prompts can be improved.
+#
+# Pattern fields:
+#   name:               snake_case identifier
+#   description:        one-line human explanation
+#   file_globs:         globs (relative to bottest root) to scan
+#   markers:            list of substrings that fingerprint the pattern
+#   mode:               "any" (default) — pass if ANY marker found
+#                       "all"          — pass only if ALL markers found
+#   weresobach_exemplars: file paths in WereSoBach to cite as the reference implementation
+#   prompt_fix:         multi-line text describing what the bot's prompts should teach it to generate
+
+version: 1
+
+patterns:
+  - name: realtime_sync
+    description: Supabase realtime subscription that reloads UI when rows change
+    file_globs: ["composeApp/src/**/*.kt"]
+    markers:
+      - "SupabaseRealtime"
+      - "postgres_changes"
+      - "realtime/v1/websocket"
+    mode: any
+    weresobach_exemplars:
+      - composeApp/src/commonMain/kotlin/com/weressobach/app/data/SupabaseRealtime.kt
+    prompt_fix: |
+      The bot should generate a `SupabaseRealtime` class that opens a websocket to
+      `wss://<supabase-host>/realtime/v1/websocket?apikey=<anon>&vsn=1.0.0`, joins a
+      channel with `postgres_changes` subscriptions for every app table, and fires a
+      callback on any event so the UI reloads. Reconnect with backoff on disconnect.
+      Wire it into `App.kt` so it starts when the user is authenticated.
+
+  - name: websockets_transport
+    description: Ktor WebSockets client plugin is installed (transport layer for realtime)
+    file_globs: ["composeApp/src/**/*.kt"]
+    markers:
+      - "io.ktor.client.plugins.websocket"
+      - "install(WebSockets)"
+      - "webSocket("
+    mode: any
+    weresobach_exemplars:
+      - composeApp/src/commonMain/kotlin/com/weressobach/app/data/SupabaseRealtime.kt
+    prompt_fix: |
+      The bot should add `io.ktor:ktor-client-websockets` to commonMain dependencies
+      and call `install(WebSockets)` on the HttpClient used for realtime subscriptions.
+      Without this, `SupabaseRealtime` cannot open a websocket connection.
+
+  - name: auth_page
+    description: AuthScreen + AuthRepository with email/password sign-in against Supabase Auth
+    file_globs: ["composeApp/src/**/*.kt"]
+    markers:
+      - "AuthScreen"
+      - "AuthRepository"
+      - "signInWithPassword"
+    mode: any
+    weresobach_exemplars:
+      - composeApp/src/commonMain/kotlin/com/weressobach/app/ui/screens/AuthScreen.kt
+      - composeApp/src/commonMain/kotlin/com/weressobach/app/data/AuthRepository.kt
+    prompt_fix: |
+      The bot should generate an `AuthScreen` composable (email + password fields, sign in / sign up
+      tabs) and an `AuthRepository` that calls Supabase Auth REST endpoints
+      (`/auth/v1/token?grant_type=password`, `/auth/v1/signup`). Persist the access token in
+      `PlatformPreferences` and expose a `StateFlow<UserSession?>` so `App.kt` can route to
+      AuthScreen when unauthenticated.
+
+  - name: creator_flow
+    description: CreateTripScreen + ConfigRepository.createTrip RPC that returns a join code
+    file_globs: ["composeApp/src/**/*.kt"]
+    markers:
+      - "CreateTripScreen"
+      - "createTrip("
+      - "generateJoinCode"
+    mode: any
+    weresobach_exemplars:
+      - composeApp/src/commonMain/kotlin/com/weressobach/app/ui/screens/CreateTripScreen.kt
+      - composeApp/src/commonMain/kotlin/com/weressobach/app/data/ConfigRepository.kt
+    prompt_fix: |
+      The bot should generate a `CreateTripScreen` (name, dates, destination fields) that calls
+      `ConfigRepository.createTrip(...)`. `createTrip` should generate a human-friendly join code
+      (e.g. `YANGZI26`) and POST to a Supabase RPC or table insert that returns the new trip id.
+      On success, navigate into the created trip and surface the join code to share.
+
+  - name: join_flow
+    description: JoinTripScreen + JoinCodeScreen + ConfigRepository.joinTrip flow
+    file_globs: ["composeApp/src/**/*.kt"]
+    markers:
+      - "JoinTripScreen"
+      - "JoinCodeScreen"
+      - "findTripByJoinCode"
+      - "joinTrip("
+    mode: any
+    weresobach_exemplars:
+      - composeApp/src/commonMain/kotlin/com/weressobach/app/ui/screens/JoinTripScreen.kt
+      - composeApp/src/commonMain/kotlin/com/weressobach/app/ui/screens/JoinCodeScreen.kt
+      - composeApp/src/commonMain/kotlin/com/weressobach/app/data/ConfigRepository.kt
+    prompt_fix: |
+      The bot should generate two screens: `JoinCodeScreen` (user enters a join code) and
+      `JoinTripScreen` (confirms the trip details and adds the user as a guest). Back them with
+      `ConfigRepository.findTripByJoinCode(code)` and `ConfigRepository.joinTrip(tripId, userId)`
+      which insert into the `guests` table. On success navigate into the joined trip.
+
+  - name: maps
+    description: Leaflet-in-WebView map (buildLeafletHtml + PlatformWebView)
+    file_globs: ["composeApp/src/**/*.kt"]
+    markers:
+      - "buildLeafletHtml"
+      - "LeafletMapHtml"
+      - "PlatformWebView"
+    mode: any
+    weresobach_exemplars:
+      - composeApp/src/commonMain/kotlin/com/weressobach/app/platform/LeafletMapHtml.kt
+      - composeApp/src/commonMain/kotlin/com/weressobach/app/platform/PlatformWebView.kt
+      - composeApp/src/androidMain/kotlin/com/weressobach/app/platform/PlatformWebView.android.kt
+      - composeApp/src/iosMain/kotlin/com/weressobach/app/platform/PlatformWebView.ios.kt
+    prompt_fix: |
+      The bot should generate a cross-platform `PlatformWebView` (expect/actual) that renders
+      raw HTML, plus a `LeafletMapHtml.buildLeafletHtml(venues)` helper that returns a complete
+      Leaflet page loading from a CDN. On Android use native WebView, on iOS use WKWebView, on
+      wasmJs use direct DOM injection (iframes are broken for Leaflet on WASM — see CLAUDE.md).
+      Feed venues with lat/lng into `buildLeafletHtml` and render via `PlatformWebViewHtml(...)`.
+
+  - name: games_wiring
+    description: GamesScreen with RPS tournament + Golf scorecards wired to data models
+    file_globs: ["composeApp/src/**/*.kt"]
+    markers:
+      - "GamesScreen"
+      - "RpsTournament"
+      - "GolfScorecardScreen"
+    mode: any
+    weresobach_exemplars:
+      - composeApp/src/commonMain/kotlin/com/weressobach/app/ui/screens/GamesScreen.kt
+      - composeApp/src/commonMain/kotlin/com/weressobach/app/ui/screens/GolfScorecardScreen.kt
+      - composeApp/src/commonMain/kotlin/com/weressobach/app/model/RpsTournament.kt
+    prompt_fix: |
+      The bot should generate a `GamesScreen` as a hub for in-trip activities, wired to functional
+      (not stub) games. Minimum: a Rock-Paper-Scissors tournament (model: `RpsTournament` with
+      rounds, matches, winner resolution) and a golf scorecard (`GolfScorecardScreen` with per-hole
+      scores, persisted via `ConfigRepository`). Persistence must use Supabase so scores sync
+      across users in the same trip.
