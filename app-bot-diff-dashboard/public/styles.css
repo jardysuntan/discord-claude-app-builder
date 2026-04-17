@@ -72,6 +72,31 @@ html, body {
   letter-spacing: -0.2px;
 }
 
+.brand-author {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--text-dim);
+  text-decoration: none;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.brand-author:hover {
+  background: var(--bg-card-hover);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.brand-author svg {
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
 .brand-tagline {
   margin: 0;
   color: var(--text-dim);
@@ -228,10 +253,29 @@ html, body {
   color: var(--text-bright);
 }
 
+.legend-eli5 {
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.5;
+  font-weight: 500;
+}
+
 .legend-desc {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-dim);
   line-height: 1.5;
+  padding-top: 6px;
+  margin-top: 2px;
+  border-top: 1px dashed var(--border);
+}
+
+.legend-tech-label {
+  color: var(--pending);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-size: 10px;
+  font-weight: 600;
+  margin-right: 4px;
 }
 
 .legend-desc a {
@@ -244,7 +288,7 @@ html, body {
   background: var(--bg);
   padding: 1px 6px;
   border-radius: 3px;
-  font-size: 11px;
+  font-size: 10px;
   font-family: var(--mono);
 }
 

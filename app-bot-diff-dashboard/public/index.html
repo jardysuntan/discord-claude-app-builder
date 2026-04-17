@@ -13,6 +13,12 @@
         <div class="brand-row">
           <span class="brand-dot"></span>
           <h1>Claude App Bot's Diff Pipeline</h1>
+          <a class="brand-author" href="https://github.com/jardysuntan" target="_blank" rel="noopener" title="Built by Jared Tan">
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+              <path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+            </svg>
+            by Jared Tan
+          </a>
         </div>
         <p class="brand-tagline">
           Every commit to the hand-built app is rebuilt by the Claude bot, diffed against the original, and surfaced back as a PR so the bot keeps learning.
@@ -46,14 +52,18 @@
           <div class="legend-item">
             <div class="legend-icon commit">●</div>
             <div class="legend-name">Commit</div>
+            <div class="legend-eli5">You tweak or add a feature in the real app — this is what the bot needs to learn to build.</div>
             <div class="legend-desc">
+              <span class="legend-tech-label">Technically:</span>
               A new commit lands on <a href="https://github.com/jardysuntan/weresobach/commits/main" target="_blank" rel="noopener">weresobach/main</a> (the hand-built north-star app).
             </div>
           </div>
           <div class="legend-item">
             <div class="legend-icon sync">●</div>
             <div class="legend-name">Phase 2 sync</div>
+            <div class="legend-eli5">The system shows the Claude bot your change and asks it to build the same thing on its own.</div>
             <div class="legend-desc">
+              <span class="legend-tech-label">Technically:</span>
               <a href="https://github.com/jardysuntan/weresobach/actions/workflows/path-b-sync.yml" target="_blank" rel="noopener">path-b-sync workflow</a>
               sends the commit + diff to the bridge's /prompt API so the bot rebuilds the same feature on bottest.
             </div>
@@ -61,14 +71,18 @@
           <div class="legend-item">
             <div class="legend-icon bottest">●</div>
             <div class="legend-name">Bottest commit</div>
+            <div class="legend-eli5">The bot's attempt lands in a separate "bot-only" copy of the app, so you can compare side by side.</div>
             <div class="legend-desc">
+              <span class="legend-tech-label">Technically:</span>
               The bot pushes its output to <a href="https://github.com/jardysuntan/weresobachbottest/commits/main" target="_blank" rel="noopener">weresobachbottest/main</a> with a <code>[path-b-sync]</code> tag.
             </div>
           </div>
           <div class="legend-item">
             <div class="legend-icon audit">●</div>
             <div class="legend-name">Phase 3 audit</div>
+            <div class="legend-eli5">An automated checker scans the bot's version for must-have features — maps, login, real-time sync, games, and more.</div>
             <div class="legend-desc">
+              <span class="legend-tech-label">Technically:</span>
               <a href="https://github.com/jardysuntan/weresobachbottest/actions/workflows/gap-audit.yml" target="_blank" rel="noopener">gap-audit workflow</a>
               fingerprints bottest against 7 curated patterns and reports missing features.
             </div>
@@ -76,8 +90,10 @@
           <div class="legend-item">
             <div class="legend-icon pr">●</div>
             <div class="legend-name">Gap PR</div>
+            <div class="legend-eli5">If anything is missing, a draft pull request opens on the bot's own repo so you can teach it better next time.</div>
             <div class="legend-desc">
-              If gaps exist, a draft PR lands on <a href="https://github.com/jardysuntan/discord-claude-app-builder/pulls" target="_blank" rel="noopener">discord-claude-app-builder</a> with the findings to improve bot prompts.
+              <span class="legend-tech-label">Technically:</span>
+              A draft PR lands on <a href="https://github.com/jardysuntan/discord-claude-app-builder/pulls" target="_blank" rel="noopener">discord-claude-app-builder</a> with the findings to improve bot prompts.
             </div>
           </div>
         </div>
