@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Claude App Bot's Diff Pipeline</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='14' font-size='14'%3E%F0%9F%9B%A4%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-row">
+          <span class="brand-dot"></span>
+          <h1>Claude App Bot's Diff Pipeline</h1>
+        </div>
+        <p class="brand-tagline">
+          Every commit to the hand-built app is rebuilt by the Claude bot, diffed against the original, and surfaced back as a PR so the bot keeps learning.
+        </p>
+        <div class="brand-sub">
+          <a href="https://github.com/jardysuntan/weresobach" target="_blank" rel="noopener">weresobach</a>
+          <span class="arrow">→</span>
+          <a href="https://github.com/jardysuntan/discord-claude-app-builder" target="_blank" rel="noopener" title="discord-claude-app-builder — the Claude-driven bot that generates apps from Discord prompts">bot</a>
+          <span class="arrow">→</span>
+          <a href="https://github.com/jardysuntan/weresobachbottest" target="_blank" rel="noopener">bottest</a>
+          <span class="arrow">→</span>
+          <a href="https://github.com/jardysuntan/weresobachbottest/actions/workflows/gap-audit.yml" target="_blank" rel="noopener" title="Gap auditor — fingerprints bottest against weresobach">audit</a>
+          <span class="arrow">→</span>
+          <a href="https://github.com/jardysuntan/discord-claude-app-builder/pulls" target="_blank" rel="noopener">bridge</a>
+        </div>
+      </div>
+      <div class="controls">
+        <span id="lastUpdated" class="last-updated"></span>
+        <label class="auto-refresh">
+          <input id="autoRefresh" type="checkbox" checked />
+          auto-refresh
+        </label>
+        <button id="refreshBtn" class="btn">↻ Refresh</button>
+      </div>
+    </header>
+
+    <section class="legend" aria-label="Pipeline stages">
+      <details open>
+        <summary>How the pipeline works</summary>
+        <div class="legend-grid">
+          <div class="legend-item">
+            <div class="legend-icon commit">●</div>
+            <div class="legend-name">Commit</div>
+            <div class="legend-desc">
+              A new commit lands on <a href="https://github.com/jardysuntan/weresobach/commits/main" target="_blank" rel="noopener">weresobach/main</a> (the hand-built north-star app).
+            </div>
+          </div>
+          <div class="legend-item">
+            <div class="legend-icon sync">●</div>
+            <div class="legend-name">Phase 2 sync</div>
+            <div class="legend-desc">
+              <a href="https://github.com/jardysuntan/weresobach/actions/workflows/path-b-sync.yml" target="_blank" rel="noopener">path-b-sync workflow</a>
+              sends the commit + diff to the bridge's /prompt API so the bot rebuilds the same feature on bottest.
+            </div>
+          </div>
+          <div class="legend-item">
+            <div class="legend-icon bottest">●</div>
+            <div class="legend-name">Bottest commit</div>
+            <div class="legend-desc">
+              The bot pushes its output to <a href="https://github.com/jardysuntan/weresobachbottest/commits/main" target="_blank" rel="noopener">weresobachbottest/main</a> with a <code>[path-b-sync]</code> tag.
+            </div>
+          </div>
+          <div class="legend-item">
+            <div class="legend-icon audit">●</div>
+            <div class="legend-name">Phase 3 audit</div>
+            <div class="legend-desc">
+              <a href="https://github.com/jardysuntan/weresobachbottest/actions/workflows/gap-audit.yml" target="_blank" rel="noopener">gap-audit workflow</a>
+              fingerprints bottest against 7 curated patterns and reports missing features.
+            </div>
+          </div>
+          <div class="legend-item">
+            <div class="legend-icon pr">●</div>
+            <div class="legend-name">Gap PR</div>
+            <div class="legend-desc">
+              If gaps exist, a draft PR lands on <a href="https://github.com/jardysuntan/discord-claude-app-builder/pulls" target="_blank" rel="noopener">discord-claude-app-builder</a> with the findings to improve bot prompts.
+            </div>
+          </div>
+        </div>
+      </details>
+    </section>
+
+    <section class="summary" id="summary">
+      <div class="summary-card" data-key="total">
+        <div class="summary-value">—</div>
+        <div class="summary-label">pipelines</div>
+      </div>
+      <div class="summary-card success" data-key="success">
+        <div class="summary-value">—</div>
+        <div class="summary-label">succeeded</div>
+      </div>
+      <div class="summary-card running" data-key="running">
+        <div class="summary-value">—</div>
+        <div class="summary-label">running</div>
+      </div>
+      <div class="summary-card failed" data-key="failed">
+        <div class="summary-value">—</div>
+        <div class="summary-label">failed</div>
+      </div>
+      <div class="summary-card skipped" data-key="skipped">
+        <div class="summary-value">—</div>
+        <div class="summary-label">skipped</div>
+      </div>
+    </section>
+
+    <main id="pipelines" class="pipelines">
+      <div class="loading">Loading pipelines…</div>
+    </main>
+
+    <footer class="footer">
+      Source: <a href="https://github.com/jardysuntan/weresobach" target="_blank" rel="noopener">jardysuntan/weresobach</a>
+      · Target: <a href="https://github.com/jardysuntan/weresobachbottest" target="_blank" rel="noopener">jardysuntan/weresobachbottest</a>
+      · Bridge PRs: <a href="https://github.com/jardysuntan/discord-claude-app-builder/pulls" target="_blank" rel="noopener">jardysuntan/discord-claude-app-builder</a>
+    </footer>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>

@@ -1,0 +1,12 @@
+name = "app-bot-diff-dashboard"
+compatibility_date = "2024-09-01"
+pages_build_output_dir = "public"
+
+# Set GH_TOKEN via:
+#   npx wrangler pages secret put GH_TOKEN --project-name=app-bot-diff-dashboard
+#
+# The PAT must have read access to:
+#   jardysuntan/weresobach
+#   jardysuntan/weresobachbottest
+#   jardysuntan/discord-claude-app-builder
+# Permissions: Contents: Read, Actions: Read, Pull requests: Read, Metadata: Read

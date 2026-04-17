@@ -1,0 +1,13 @@
+{
+  "name": "app-bot-diff-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cloudflare Pages dashboard visualizing the Path B CI/CD pipeline",
+  "scripts": {
+    "dev": "wrangler pages dev public --compatibility-date=2024-09-01",
+    "deploy": "wrangler pages deploy public --project-name=app-bot-diff-dashboard --commit-dirty=true"
+  },
+  "devDependencies": {
+    "wrangler": "^3.78.0"
+  }
+}
