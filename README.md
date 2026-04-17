@@ -320,6 +320,12 @@ On failure, the bot automatically files a GitHub issue and opens a fix PR.
 
 A nightly cron runs `scripts/nightly-smoketest.sh` and posts results to the `#smoke-tests` channel.
 
+## Bot learning loop
+
+A live dashboard at **[app-bot-diff-dashboard.pages.dev](https://app-bot-diff-dashboard.pages.dev)** shows how well the bot generates apps compared against a hand-built reference app. Every commit to the reference repo triggers the bot to rebuild the same feature in a bot-only copy, then an auditor scans for missing patterns (auth, real-time sync, maps, games, etc.). Gaps open a draft PR here with suggested prompt improvements.
+
+The dashboard renders each commit as a CI/CD-style pipeline row: `Commit → Phase 2 sync → Bottest → Phase 3 audit → Gap PR`. Source in [`app-bot-diff-dashboard/`](app-bot-diff-dashboard/) — Cloudflare Pages static site plus a Pages Function proxying the GitHub API.
+
 ## API
 
 A REST API runs on port 8100 for programmatic access to all bot functionality.
