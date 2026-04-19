@@ -32,7 +32,9 @@
           <span class="arrow">→</span>
           <a href="https://github.com/jardysuntan/weresobachbottest/actions/workflows/gap-audit.yml" target="_blank" rel="noopener" title="Gap auditor — fingerprints bottest against weresobach">audit</a>
           <span class="arrow">→</span>
-          <a href="https://github.com/jardysuntan/discord-claude-app-builder/pulls" target="_blank" rel="noopener">bridge</a>
+          <a href="https://github.com/jardysuntan/discord-claude-app-builder/pulls" target="_blank" rel="noopener">bridge PR</a>
+          <span class="arrow">↻</span>
+          <a href="https://github.com/jardysuntan/discord-claude-app-builder/actions/workflows/path-b-verify.yml" target="_blank" rel="noopener" title="Phase 4 verify — re-runs Phase 2 up to 5× until bottest closes the gap">verify</a>
         </div>
       </div>
       <div class="controls">
@@ -93,7 +95,67 @@
             <div class="legend-eli5">If anything is missing, a draft pull request opens on the bot's own repo so you can teach it better next time.</div>
             <div class="legend-desc">
               <span class="legend-tech-label">Technically:</span>
-              A draft PR lands on <a href="https://github.com/jardysuntan/discord-claude-app-builder/pulls" target="_blank" rel="noopener">discord-claude-app-builder</a> with the findings to improve bot prompts.
+              A draft PR lands on <a href="https://github.com/jardysuntan/discord-claude-app-builder/pulls" target="_blank" rel="noopener">discord-claude-app-builder</a> with the findings to improve bot prompts. PR body carries a <code>&lt;!-- path-b-retry --&gt;</code> marker so Phase 4 knows which SHA to retry.
+            </div>
+          </div>
+          <div class="legend-item">
+            <div class="legend-icon verify">●</div>
+            <div class="legend-name">Phase 4 verify</div>
+            <div class="legend-eli5">When you merge the gap PR, the bot gets another chance to build it — up to 5 tries. Stops when the audit finds zero gaps, or hits the limit.</div>
+            <div class="legend-desc">
+              <span class="legend-tech-label">Technically:</span>
+              <a href="https://github.com/jardysuntan/discord-claude-app-builder/actions/workflows/path-b-verify.yml" target="_blank" rel="noopener">path-b-verify workflow</a>
+              parses the PR marker, bumps <code>.path-b-retries.json</code> on bottest, and dispatches <code>path-b-sync.yml</code> on weresobach with the same SHA.
+            </div>
+          </div>
+        </div>
+      </details>
+    </section>
+
+    <section class="legend" aria-label="Token permissions">
+      <details>
+        <summary>What GitHub permissions does this need?</summary>
+        <div class="tokens-intro">
+          The pipeline spans three private repos, so it uses <strong>fine-grained personal access tokens (PATs)</strong> scoped to exactly these repos — not your whole GitHub account. All tokens live as repo / Cloudflare secrets; none are exposed on this page. Three tokens total, two of which can modify code:
+        </div>
+        <div class="tokens-grid">
+          <div class="token-item">
+            <div class="token-head">
+              <span class="token-badge read">Read only</span>
+              <span class="token-name">Dashboard reader <code>GH_TOKEN</code></span>
+            </div>
+            <div class="token-eli5">
+              Lets <em>this dashboard</em> list commits, PRs, and workflow runs. Can't change anything — if it ever leaked, nobody could use it to push code, dispatch workflows, or merge PRs.
+            </div>
+            <div class="token-scopes">
+              <code>Contents: read</code> · <code>Actions: read</code> · <code>Pull requests: read</code>
+              <div class="token-on">on <code>weresobach</code>, <code>weresobachbottest</code>, <code>discord-claude-app-builder</code></div>
+            </div>
+          </div>
+          <div class="token-item">
+            <div class="token-head">
+              <span class="token-badge write">Write</span>
+              <span class="token-name">Phase 3 PR opener <code>BRIDGE_AUDIT_PR_TOKEN</code></span>
+            </div>
+            <div class="token-eli5">
+              Lets the gap auditor open draft PRs on the bot's repo when it spots missing features, and push the branch that backs each PR. Cannot touch the hand-built app's source.
+            </div>
+            <div class="token-scopes">
+              <code>Contents: write</code> · <code>Pull requests: write</code>
+              <div class="token-on">on <code>discord-claude-app-builder</code>, <code>weresobachbottest</code></div>
+            </div>
+          </div>
+          <div class="token-item">
+            <div class="token-head">
+              <span class="token-badge write">Write</span>
+              <span class="token-name">Phase 4 verifier <code>PATH_B_VERIFY_TOKEN</code></span>
+            </div>
+            <div class="token-eli5">
+              Lets the verify loop bump the retry counter on the bot's sandbox and ask the pipeline to try a SHA again. Can dispatch workflows but doesn't modify code directly.
+            </div>
+            <div class="token-scopes">
+              <code>Actions: write</code> (on weresobach) · <code>Contents: write</code> (on weresobachbottest) · <code>Pull requests: write</code> (on discord-claude-app-builder)
+              <div class="token-on">different surface on each of the three repos — principle of least privilege</div>
             </div>
           </div>
         </div>

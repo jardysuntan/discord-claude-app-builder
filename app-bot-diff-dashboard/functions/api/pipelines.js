@@ -9,7 +9,12 @@ const BOTTEST = `${OWNER}/weresobachbottest`;
 const BRIDGE = `${OWNER}/discord-claude-app-builder`;
 const SYNC_WORKFLOW_FILE = "path-b-sync.yml";
 const AUDIT_WORKFLOW_FILE = "gap-audit.yml";
+const VERIFY_WORKFLOW_FILE = "path-b-verify.yml";
+const RETRIES_FILE = ".path-b-retries.json";
+const MAX_RETRIES = 5;
 const SKIP_RE = /\[skip-sync\]|\[path-b-sync\]|^(ci|chore|docs|test)[:(]/;
+// Phase 4 marker appearing in Phase 3 auditor PR bodies.
+const RETRY_MARKER_RE = /weresobach_sha=([0-9a-f]{7,40})/i;
 
 function gh(env) {
   return async function call(path, params = {}) {
@@ -55,6 +60,88 @@ function shaFromBottestCommitMessage(msg) {
   return m ? m[1] : null;
 }
 
+function shaFromPrBody(body) {
+  if (!body) return null;
+  const m = body.match(RETRY_MARKER_RE);
+  return m ? m[1] : null;
+}
+
+async function fetchRetriesJson(call) {
+  try {
+    const resp = await call(`/repos/${BOTTEST}/contents/${RETRIES_FILE}`);
+    if (!resp?.content) return {};
+    const decoded = atob(resp.content.replace(/\s/g, ""));
+    return JSON.parse(decoded || "{}");
+  } catch {
+    return {};
+  }
+}
+
+// Resolve retry count for a weresobach SHA against the retries map, which is keyed
+// by full SHA. The caller passes the full SHA; we also try a prefix-match as a
+// safety net in case the stored key is abbreviated.
+function retryCountFor(sha, retriesMap) {
+  if (!sha || !retriesMap) return 0;
+  if (retriesMap[sha] != null) return Number(retriesMap[sha]) || 0;
+  for (const [k, v] of Object.entries(retriesMap)) {
+    if (k.startsWith(sha) || sha.startsWith(k)) return Number(v) || 0;
+  }
+  return 0;
+}
+
+function computeVerifyStage({
+  skipped,
+  bottestCommit,
+  auditRun,
+  pr,
+  verifyRun,
+  retryCount,
+}) {
+  if (skipped) {
+    return { status: "skipped", subtitle: null };
+  }
+  if (!bottestCommit) {
+    return { status: "pending", subtitle: "not synced yet" };
+  }
+  const auditStatus = statusOf(auditRun);
+  if (!auditRun || auditStatus === "pending" || auditStatus === "queued" || auditStatus === "running") {
+    return { status: "pending", subtitle: "auditing…" };
+  }
+  if (auditStatus === "failed") {
+    return { status: "failed", subtitle: "audit error" };
+  }
+  if (!pr) {
+    // Audit completed and opened no PR → no gaps → verified.
+    return {
+      status: "success",
+      subtitle: retryCount > 0 ? `verified · retry ${retryCount}/${MAX_RETRIES}` : "no gaps",
+    };
+  }
+  if (pr.state === "open") {
+    return {
+      status: "pending",
+      subtitle: retryCount > 0 ? `retry ${retryCount}/${MAX_RETRIES} · awaiting merge` : "awaiting merge",
+    };
+  }
+  // PR merged.
+  if (pr.merged_at) {
+    if (retryCount >= MAX_RETRIES) {
+      return { status: "failed", subtitle: `${MAX_RETRIES}/${MAX_RETRIES} retries` };
+    }
+    const vStatus = statusOf(verifyRun);
+    if (verifyRun && (vStatus === "running" || vStatus === "queued" || vStatus === "pending")) {
+      return { status: "running", subtitle: `retry ${retryCount}/${MAX_RETRIES} · dispatching…` };
+    }
+    if (verifyRun && vStatus === "failed") {
+      return { status: "failed", subtitle: `verify run failed` };
+    }
+    // verify succeeded (or hasn't fired yet) but no new audit PR closing the loop yet.
+    return { status: "running", subtitle: `retry ${retryCount}/${MAX_RETRIES} · re-syncing` };
+  }
+  // PR closed without merging (declined).
+  return { status: "skipped", subtitle: "PR declined" };
+}
+
 export async function onRequestGet({ env, request }) {
   try {
     const call = gh(env);
@@ -68,6 +155,8 @@ export async function onRequestGet({ env, request }) {
       bottestCommits,
       auditRuns,
       bridgePulls,
+      verifyRuns,
+      retriesMap,
     ] = await Promise.all([
       call(`/repos/${WERESOBACH}/commits`, { per_page: limit }),
       call(`/repos/${WERESOBACH}/actions/workflows/${SYNC_WORKFLOW_FILE}/runs`, {
@@ -76,13 +165,17 @@ export async function onRequestGet({ env, request }) {
       call(`/repos/${BOTTEST}/commits`, { per_page: Math.max(limit, 30) }),
       call(`/repos/${BOTTEST}/actions/workflows/${AUDIT_WORKFLOW_FILE}/runs`, {
         per_page: Math.max(limit, 30),
-      }).catch(() => ({ workflow_runs: [] })), // workflow may not exist yet on first deploy
+      }).catch(() => ({ workflow_runs: [] })),
       call(`/repos/${BRIDGE}/pulls`, {
         state: "all",
         per_page: 50,
         sort: "created",
         direction: "desc",
       }).catch(() => []),
+      call(`/repos/${BRIDGE}/actions/workflows/${VERIFY_WORKFLOW_FILE}/runs`, {
+        per_page: 50,
+      }).catch(() => ({ workflow_runs: [] })),
+      fetchRetriesJson(call),
     ]);
 
     const syncRunByHeadSha = new Map();
@@ -95,7 +188,9 @@ export async function onRequestGet({ env, request }) {
       auditRunByHeadSha.set(r.head_sha, r);
     }
 
-    // Group bottest commits by the source weresobach SHA they reference.
+    // Pick the most recent bottest commit per originating weresobach SHA.
+    // bottestCommits is returned newest-first; the first entry we see for a source
+    // SHA wins, which is what we want (most recent retry attempt).
     const bottestCommitBySourceSha = new Map();
     for (const c of bottestCommits) {
       const sourceSha = shaFromBottestCommitMessage(c.commit?.message || "");
@@ -106,10 +201,27 @@ export async function onRequestGet({ env, request }) {
       }
     }
 
-    const prByBranch = new Map();
+    // Map Phase 3 auditor PRs by the bottest SHA encoded in their branch name,
+    // and also collect (weresobachSha → latest PR) for Phase 4 retry tracking.
+    const prByBottestSha = new Map();
+    const prByWeresobachSha = new Map();
     for (const pr of bridgePulls) {
       const m = pr.head?.ref?.match(/^gap-audit\/([0-9a-f]{7,40})$/);
-      if (m) prByBranch.set(m[1], pr);
+      if (m) prByBottestSha.set(m[1], pr);
+      const wsha = shaFromPrBody(pr.body || "");
+      if (wsha && !prByWeresobachSha.has(wsha)) {
+        prByWeresobachSha.set(wsha, pr);
+      }
+    }
+
+    // Phase 4 (verify) runs are triggered by pull_request events; their head_branch
+    // is the PR's head ref — i.e., gap-audit/<bottestSha>. Map accordingly.
+    const verifyRunByBottestSha = new Map();
+    for (const r of verifyRuns.workflow_runs || []) {
+      const m = (r.head_branch || "").match(/^gap-audit\/([0-9a-f]{7,40})$/);
+      if (m && !verifyRunByBottestSha.has(m[1])) {
+        verifyRunByBottestSha.set(m[1], r);
+      }
     }
 
     const pipelines = weresobachCommits.slice(0, limit).map((c) => {
@@ -124,7 +236,18 @@ export async function onRequestGet({ env, request }) {
       const bottestSha = bottestCommit?.sha;
       const bottestShortSha = bottestSha?.slice(0, 7);
       const auditRun = bottestSha ? auditRunByHeadSha.get(bottestSha) : null;
-      const pr = bottestSha ? prByBranch.get(bottestSha) : null;
+      const pr = bottestSha ? prByBottestSha.get(bottestSha) : null;
+      const verifyRun = bottestSha ? verifyRunByBottestSha.get(bottestSha) : null;
+      const retryCount = retryCountFor(sha, retriesMap);
+
+      const verify = computeVerifyStage({
+        skipped,
+        bottestCommit,
+        auditRun,
+        pr,
+        verifyRun,
+        retryCount,
+      });
 
       // Build stages.
       const stages = [
@@ -179,6 +302,13 @@ export async function onRequestGet({ env, request }) {
           subtitle: pr ? (pr.draft ? "draft" : pr.state) : null,
           url: pr?.html_url,
         },
+        {
+          name: "verify",
+          label: "Phase 4 verify",
+          status: verify.status,
+          subtitle: verify.subtitle,
+          url: verifyRun?.html_url,
+        },
       ];
 
       return {
@@ -197,6 +327,11 @@ export async function onRequestGet({ env, request }) {
           syncRunId: syncRun?.id,
           auditRunId: auditRun?.id,
           prNumber: pr?.number,
+          verifyRunId: verifyRun?.id,
+        },
+        retry: {
+          count: retryCount,
+          max: MAX_RETRIES,
         },
       };
     });
@@ -205,6 +340,7 @@ export async function onRequestGet({ env, request }) {
       JSON.stringify({
         generatedAt: new Date().toISOString(),
         repos: { source: WERESOBACH, target: BOTTEST, bridge: BRIDGE },
+        config: { maxRetries: MAX_RETRIES },
         pipelines,
       }),
       {

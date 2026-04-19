@@ -1,0 +1,136 @@
+name: Path B verify (Phase 4)
+
+# Phase 4 of the Path B pipeline: when a gap-audit PR (opened by Phase 3) is merged
+# on this repo, re-run Phase 2 for the originating weresobach SHA so the bot gets a
+# fresh attempt at closing the gap. Retries are capped at 5 per weresobach SHA.
+#
+# Trigger ordering:
+#   1. Phase 3 auditor opens a draft PR here with a marker
+#      <!-- path-b-retry: weresobach_sha=<sha> retry=<N>/5 -->
+#   2. Human reviews + merges the PR (presumably after tweaking bot prompts).
+#   3. This workflow parses the marker, bumps .path-b-retries.json on weresobachbottest,
+#      and dispatches path-b-sync.yml on weresobach with commit_sha=<sha>.
+#   4. That sync creates a fresh bottest commit, which triggers gap-audit.yml again.
+#      If gaps still remain, a new PR lands here with retry=N+1. Loop until gap count
+#      hits 0 (auditor skips PR creation → verify stage resolves "success") or retry=5
+#      (verify posts a "limit reached" comment and stops).
+#
+# Required secret: PATH_B_VERIFY_TOKEN (fine-grained PAT) with:
+#   - actions:write on jardysuntan/weresobach          (dispatch path-b-sync.yml)
+#   - contents:write on jardysuntan/weresobachbottest  (commit counter bump)
+#   - pull_requests:write on jardysuntan/discord-claude-app-builder  (PR comment)
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      weresobach_sha:
+        description: weresobach SHA to retry-sync (bypasses PR parsing)
+        required: true
+      pr_number:
+        description: optional PR number to comment on after dispatch
+        required: false
+        default: ""
+
+concurrency:
+  group: path-b-verify-${{ github.event.pull_request.number || github.event.inputs.weresobach_sha }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Parse retry marker from PR body (or dispatch input)
+        id: parse
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          DISPATCH_SHA: ${{ inputs.weresobach_sha }}
+        run: |
+          set -eo pipefail
+          if [ -n "$DISPATCH_SHA" ]; then
+            echo "sha=$DISPATCH_SHA" >> "$GITHUB_OUTPUT"
+            echo "found=yes" >> "$GITHUB_OUTPUT"
+            echo "Manual dispatch for weresobach@$DISPATCH_SHA"
+            exit 0
+          fi
+          sha=$(printf '%s' "$PR_BODY" | grep -Eo 'weresobach_sha=[0-9a-f]+' | head -1 | cut -d= -f2 || true)
+          if [ -z "$sha" ]; then
+            echo "::notice::PR body has no path-b-retry marker — not a Phase 3 auditor PR. Skipping."
+            echo "found=no" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "found=yes" >> "$GITHUB_OUTPUT"
+          echo "Parsed weresobach_sha=$sha from PR body."
+
+      - name: Checkout bottest (via PAT)
+        if: steps.parse.outputs.found == 'yes'
+        uses: actions/checkout@v4
+        with:
+          repository: jardysuntan/weresobachbottest
+          token: ${{ secrets.PATH_B_VERIFY_TOKEN }}
+          path: bottest
+          fetch-depth: 1
+
+      - name: Bump retry counter and dispatch sync
+        if: steps.parse.outputs.found == 'yes'
+        env:
+          GH_TOKEN: ${{ secrets.PATH_B_VERIFY_TOKEN }}
+          SHA: ${{ steps.parse.outputs.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          DISPATCH_PR_NUMBER: ${{ inputs.pr_number }}
+          MAX_RETRIES: "5"
+        run: |
+          set -eo pipefail
+          cd bottest
+
+          short_sha="${SHA:0:7}"
+          pr_number="${PR_NUMBER:-$DISPATCH_PR_NUMBER}"
+
+          current=0
+          if [ -f .path-b-retries.json ]; then
+            current=$(python3 -c "import json; d=json.load(open('.path-b-retries.json')); print(d.get('$SHA', 0))")
+          fi
+          echo "current retry count for weresobach@$short_sha: $current / $MAX_RETRIES"
+
+          if [ "$current" -ge "$MAX_RETRIES" ]; then
+            echo "::warning::retry limit ($MAX_RETRIES) reached for weresobach@$short_sha"
+            if [ -n "$pr_number" ]; then
+              gh pr comment "$pr_number" --repo jardysuntan/discord-claude-app-builder \
+                --body $'⚠️ **Path B verify (Phase 4): retry limit reached.**\n\nThe bot has had **'"$MAX_RETRIES"'/'"$MAX_RETRIES"'** attempts at `weresobach@'"$short_sha"'` and the auditor is still finding gaps. No further automated retries will fire for this SHA. Manual review needed — consider editing bot prompts directly or extending the retry cap.'
+            fi
+            exit 0
+          fi
+
+          next=$((current + 1))
+          python3 - <<PY
+          import json, os
+          path = '.path-b-retries.json'
+          d = json.load(open(path)) if os.path.exists(path) else {}
+          d['$SHA'] = $next
+          with open(path, 'w') as fh:
+              json.dump(d, fh, indent=2, sort_keys=True)
+              fh.write('\n')
+          PY
+
+          git config user.name "path-b-verify-bot"
+          git config user.email "path-b-verify-bot@users.noreply.github.com"
+          git add .path-b-retries.json
+          git commit -m "chore(path-b): bump retry counter for weresobach@${short_sha} → ${next}/${MAX_RETRIES} [path-b-retry-bump]"
+          git push origin main
+          echo "✓ counter bumped on bottest to ${next}/${MAX_RETRIES}"
+
+          gh workflow run path-b-sync.yml \
+            --repo jardysuntan/weresobach \
+            --ref main \
+            -f commit_sha="$SHA"
+          echo "✓ dispatched path-b-sync on weresobach for weresobach@$short_sha"
+
+          if [ -n "$pr_number" ]; then
+            gh pr comment "$pr_number" --repo jardysuntan/discord-claude-app-builder \
+              --body $'🔁 **Path B verify (Phase 4): retry **'"${next}"'/'"${MAX_RETRIES}"'** dispatched.**\n\nRe-syncing `weresobach@'"${short_sha}"'` now. Watch progress on the [dashboard](https://app-bot-diff-dashboard.pages.dev) or [weresobach Actions](https://github.com/jardysuntan/weresobach/actions/workflows/path-b-sync.yml).'
+          fi

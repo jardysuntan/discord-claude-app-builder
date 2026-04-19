@@ -19,6 +19,7 @@ const STAGE_LABELS_LONG = {
   bottest: "Bottest",
   audit: "Phase 3",
   pr: "Bridge PR",
+  verify: "Phase 4",
 };
 
 const STAGE_DESCRIPTIONS = {
@@ -27,6 +28,7 @@ const STAGE_DESCRIPTIONS = {
   bottest: "Bot-generated output pushed to weresobachbottest/main, tagged [path-b-sync].",
   audit: "Phase 3 workflow (gap-audit.yml): fingerprints bottest against 7 curated patterns and reports missing features.",
   pr: "Draft PR on discord-claude-app-builder with the gap findings, to improve bot prompts.",
+  verify: "Phase 4 workflow (path-b-verify.yml): when a gap PR is merged, re-runs Phase 2 up to 5× until the audit finds no more gaps.",
 };
 
 function fmtRelativeTime(iso) {
@@ -73,6 +75,15 @@ function renderStage(stage) {
   `;
 }
 
+function renderRetryChip(retry) {
+  if (!retry || !retry.max) return "";
+  const count = retry.count || 0;
+  if (count === 0) return "";
+  const exhausted = count >= retry.max;
+  const cls = exhausted ? "retry-chip exhausted" : "retry-chip active";
+  return ` · <span class="${cls}" title="Phase 4 retries consumed">↻ ${count}/${retry.max}</span>`;
+}
+
 function renderPipeline(p) {
   const overall = overallStatus(p.stages);
   const stagesHtml = p.stages.map(renderStage).join("");
@@ -80,6 +91,7 @@ function renderPipeline(p) {
   const commitLink = p.source.url
     ? `<a href="${p.source.url}" target="_blank" rel="noopener">${p.source.shortSha}</a>`
     : p.source.shortSha;
+  const retryChip = renderRetryChip(p.retry);
   return `
     <article class="pipeline" data-sha="${p.source.sha}">
       <header class="pipeline-header">
@@ -90,6 +102,7 @@ function renderPipeline(p) {
             · ${escapeHtml(p.source.author || "unknown")}
             · ${timeAgo}
             ${p.source.skipped ? ' · <span style="color: var(--skipped)">skip-sync</span>' : ""}
+            ${retryChip}
           </div>
         </div>
         <div class="pipeline-overall">
@@ -104,6 +117,8 @@ function renderPipeline(p) {
           ${renderDetailCard("Phase 2 run", p.ids.syncRunId ? p.ids.syncRunId : "—")}
           ${renderDetailCard("Phase 3 run", p.ids.auditRunId ? p.ids.auditRunId : "—")}
           ${renderDetailCard("Bridge PR", p.ids.prNumber ? "#" + p.ids.prNumber : "—")}
+          ${renderDetailCard("Phase 4 run", p.ids.verifyRunId ? p.ids.verifyRunId : "—")}
+          ${renderDetailCard("Retries", `${p.retry?.count ?? 0} / ${p.retry?.max ?? 5}`)}
         </div>
         <pre class="detail-full-message">${escapeHtml(p.source.fullMessage || "")}</pre>
       </div>
