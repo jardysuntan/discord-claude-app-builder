@@ -1,0 +1,13 @@
+name = "weresobach-progress-dashboard"
+compatibility_date = "2024-09-01"
+pages_build_output_dir = "public"
+
+# Set GH_TOKEN via:
+#   npx wrangler pages secret put GH_TOKEN --project-name=weresobach-progress-dashboard
+#
+# The PAT must have read access to:
+#   jardysuntan/discord-claude-app-builder  (hosts WERESOBACH_PROGRESS.md)
+# Permissions: Contents: Read, Metadata: Read
+#
+# NOTE: you can reuse the PAT already on `app-bot-diff-dashboard` — same
+# `jardysuntan/discord-claude-app-builder` repo, read-only scope is sufficient.

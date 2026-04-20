@@ -1,0 +1,14 @@
+{
+  "name": "weresobach-progress-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Pages Kanban dashboard for the WereSoBach App Store sprint",
+  "scripts": {
+    "dev": "wrangler pages dev public --compatibility-date=2024-09-01",
+    "deploy": "wrangler pages deploy public --project-name=weresobach-progress-dashboard --commit-dirty=true"
+  },
+  "devDependencies": {
+    "wrangler": "^3.78.0"
+  }
+}

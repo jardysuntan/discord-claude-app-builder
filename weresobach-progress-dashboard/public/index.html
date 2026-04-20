@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>WereSoBach — Sprint Board</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='14' font-size='14'%3E%F0%9F%8E%B7%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-row">
+          <span class="brand-dot"></span>
+          <h1>WereSoBach — Sprint Board</h1>
+          <a class="brand-author" href="https://github.com/jardysuntan" target="_blank" rel="noopener" title="Built by Jared Tan">
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+              <path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+            </svg>
+            by Jared Tan
+          </a>
+        </div>
+        <p class="brand-tagline">
+          Live view of the "We're so Bach" App Store push. Cards are parsed from <code>WERESOBACH_PROGRESS.md</code>; agents edit that file, this dashboard reflects it within 60s.
+        </p>
+        <div class="brand-sub">
+          <a id="sourceLink" href="https://github.com/jardysuntan/discord-claude-app-builder/blob/main/WERESOBACH_PROGRESS.md" target="_blank" rel="noopener">WERESOBACH_PROGRESS.md</a>
+          <span class="arrow">·</span>
+          <span id="deadline">target: 2026-04-24 submit → 2026-05-27 live</span>
+        </div>
+      </div>
+      <div class="controls">
+        <span id="lastUpdated" class="last-updated">never</span>
+        <label class="auto-refresh">
+          <input id="autoRefresh" type="checkbox" checked />
+          auto-refresh (60s)
+        </label>
+        <button id="refreshBtn" class="btn">↻ Refresh</button>
+      </div>
+    </header>
+
+    <section class="summary" id="summary">
+      <div class="summary-card" data-key="total">
+        <div class="summary-value">—</div>
+        <div class="summary-label">tasks</div>
+      </div>
+      <div class="summary-card todo" data-key="TODO">
+        <div class="summary-value">—</div>
+        <div class="summary-label">todo</div>
+      </div>
+      <div class="summary-card wip" data-key="WIP">
+        <div class="summary-value">—</div>
+        <div class="summary-label">in progress</div>
+      </div>
+      <div class="summary-card blocked" data-key="BLOCKED">
+        <div class="summary-value">—</div>
+        <div class="summary-label">blocked</div>
+      </div>
+      <div class="summary-card done" data-key="DONE">
+        <div class="summary-value">—</div>
+        <div class="summary-label">done</div>
+      </div>
+    </section>
+
+    <main id="board" class="board">
+      <div class="loading">Loading board…</div>
+    </main>
+
+    <section class="log-section">
+      <details id="logDetails">
+        <summary>
+          <span class="log-summary-label">Agent log</span>
+          <span id="logCount" class="log-summary-count">—</span>
+        </summary>
+        <div id="logList" class="log-list">
+          <div class="loading">Loading log…</div>
+        </div>
+      </details>
+    </section>
+
+    <footer class="footer">
+      Source: <a id="sourceLinkFooter" href="https://github.com/jardysuntan/discord-claude-app-builder/blob/main/WERESOBACH_PROGRESS.md" target="_blank" rel="noopener">WERESOBACH_PROGRESS.md</a>
+      · Edit the markdown to move cards.
+    </footer>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>
