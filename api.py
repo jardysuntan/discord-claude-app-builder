@@ -199,6 +199,12 @@ class ExtractRequest(BaseModel):
     temperature: float = 0.1
 
 
+class ExtractDocTextRequest(BaseModel):
+    """Server-side text extraction from a .pdf or .docx file."""
+    filename: str
+    base64: str
+
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _require_admin(account: Account):
@@ -349,6 +355,64 @@ async def extract_structured(req: ExtractRequest,
         # HTTP-level retries kicking in. Swap to raise if you prefer HTTP errors.
         return result
     return result
+
+
+@app.post("/api/v1/extract-doc-text")
+async def extract_doc_text(req: ExtractDocTextRequest,
+                           account: Account = Depends(get_current_account)):
+    """
+    Extract plain text from a .pdf / .docx file. Called by mobile clients that
+    collected the file via a platform file picker. Client-side .txt/.md uploads
+    should skip this endpoint.
+
+    Request: {"filename": "<name.ext>", "base64": "<bytes>"}
+    Response: {"text": "<extracted>", "pages": <int>} or HTTPException on failure.
+    """
+    import base64
+    import io
+
+    ext = req.filename.rsplit(".", 1)[-1].lower() if "." in req.filename else ""
+    if ext not in {"pdf", "docx"}:
+        raise HTTPException(400, f"Unsupported file type '.{ext}'. Use .pdf or .docx.")
+
+    try:
+        raw = base64.b64decode(req.base64, validate=False)
+    except Exception as e:
+        raise HTTPException(400, f"Invalid base64: {e}")
+
+    if len(raw) == 0:
+        raise HTTPException(400, "Empty file.")
+    if len(raw) > 25 * 1024 * 1024:
+        raise HTTPException(413, "File too large (>25 MB).")
+
+    if ext == "pdf":
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            raise HTTPException(500, "pypdf not installed on the bridge.")
+        try:
+            reader = PdfReader(io.BytesIO(raw))
+            pages = [(p.extract_text() or "") for p in reader.pages]
+            text = "\n\n".join(pages).strip()
+            return {"text": text, "pages": len(pages)}
+        except Exception as e:
+            raise HTTPException(422, f"PDF parse failed: {e}")
+
+    # .docx
+    try:
+        import docx  # python-docx
+    except ImportError:
+        raise HTTPException(500, "python-docx not installed on the bridge.")
+    try:
+        document = docx.Document(io.BytesIO(raw))
+        parts = [p.text for p in document.paragraphs]
+        for table in document.tables:
+            for row in table.rows:
+                parts.append("\t".join(cell.text for cell in row.cells))
+        text = "\n".join(parts).strip()
+        return {"text": text, "pages": len(document.paragraphs)}
+    except Exception as e:
+        raise HTTPException(422, f"DOCX parse failed: {e}")
 
 
 @app.post("/api/v1/account/keys")
