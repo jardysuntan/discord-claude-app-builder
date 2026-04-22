@@ -247,8 +247,13 @@ async def _run_scenario(
     url = await WebPlatform.serve(ws_path, workspace_key=slug)
     if url:
         import asyncio
-        # Prefer the deployed URL (e.g. CF Pages) — more reliable than localhost
-        screenshot_url = url if url.startswith("https://") else f"http://localhost:{config.WEB_SERVE_PORT}"
+        # Prefer CF Pages (stable, pre-warmed). Otherwise screenshot the local
+        # HTTP server directly — a fresh trycloudflare quick-tunnel isn't
+        # guaranteed to be routing traffic yet, which silently fails the shot.
+        if "pages.dev" in url:
+            screenshot_url = url
+        else:
+            screenshot_url = f"http://localhost:{config.WEB_SERVE_PORT}"
         await asyncio.sleep(2)
         screenshot_path = await take_web_screenshot(screenshot_url)
     dur = time.time() - t0
