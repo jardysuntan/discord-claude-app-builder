@@ -26,6 +26,7 @@ from workspace_spec import (
     save_workspace_spec,
 )
 from helpers.error_reporter import report_error_and_fix
+from helpers.parallel_build import maybe_run_parallel_build
 import glob
 import os
 
@@ -384,6 +385,17 @@ async def handle_buildapp(
 
     async def loop_status(msg):
         await on_status(msg, None)
+
+    parallel_result = await maybe_run_parallel_build(
+        app_name=app_name,
+        description=description,
+        workspace_key=slug,
+        workspace_path=ws_path,
+        on_status=loop_status,
+    )
+    if parallel_result.enabled:
+        icon = "✅" if parallel_result.success else "⚠️"
+        await on_status(f"{icon} {parallel_result.summary}", None)
 
     loop_result = await run_agent_loop(
         initial_prompt=feature_prompt,
