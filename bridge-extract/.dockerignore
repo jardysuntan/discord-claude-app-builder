@@ -1,0 +1,10 @@
+__pycache__
+*.pyc
+.venv
+venv
+.env
+.env.*
+.credential-key
+accounts.json
+README.md
+.DS_Store

@@ -1,0 +1,38 @@
+# fly.toml app configuration file generated for wsb-bridge on 2026-05-04T23:35:39-04:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'wsb-bridge'
+primary_region = 'sjc'
+
+[build]
+
+[env]
+  ACCOUNTS_PATH = '/data/accounts.json'
+  EXTRACT_LIMITS_PATH = '/data/extract_limits.json'
+  PORT = '8100'
+
+[[mounts]]
+  source = 'bridge_data'
+  destination = '/data'
+
+[http_service]
+  internal_port = 8100
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    interval = '30s'
+    timeout = '5s'
+    grace_period = '10s'
+    method = 'GET'
+    path = '/healthz'
+
+[[vm]]
+  memory = '512mb'
+  cpu_kind = 'shared'
+  cpus = 1
+  memory_mb = 512
