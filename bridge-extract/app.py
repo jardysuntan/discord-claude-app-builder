@@ -91,6 +91,24 @@ class GeocodeVenueInput(BaseModel):
 
 class GeocodeVenuesRequest(BaseModel):
     venues: list[GeocodeVenueInput]
+    # Optional trip-level location ("Las Vegas, NV", "Lexington, MA"). When
+    # set, gets appended to every venue query so Mapbox's global ranking
+    # doesn't pick the wrong international branch (e.g. Din Tai Fung in
+    # Thailand for a Vegas trip).
+    trip_location: str | None = None
+
+
+class GeocodePlaceRequest(BaseModel):
+    """Single-place autocomplete query for the trip-creation Location field.
+
+    Distinct from /geocode-venues (which is a batch resolve for already-named
+    POIs). This one returns up to N suggestions for a free-text query so the
+    user can pick the right city. Limit kept small — autocomplete sends one
+    request per debounce tick.
+    """
+
+    query: str
+    limit: int = 5
 
 
 class GolfCourseLookupInput(BaseModel):
@@ -233,9 +251,20 @@ async def geocode_venues(req: GeocodeVenuesRequest,
         raise HTTPException(500, "MAPBOX_TOKEN not configured.")
 
     results: list[dict] = []
+    trip_loc = (req.trip_location or "").strip()
     async with httpx.AsyncClient(timeout=10.0) as client:
         for v in req.venues:
-            query = ", ".join(p for p in (v.name.strip(), (v.address or "").strip()) if p)
+            parts = [v.name.strip(), (v.address or "").strip()]
+            # If the venue extraction had no address, append the trip's own
+            # location as a region hint. Skip the append when the venue's
+            # address already names a city (avoids "Las Vegas, NV, Las Vegas, NV").
+            has_city_hint = any(
+                trip_loc and trip_loc.lower().split(",")[0].strip() in p.lower()
+                for p in parts if p
+            )
+            if trip_loc and not has_city_hint:
+                parts.append(trip_loc)
+            query = ", ".join(p for p in parts if p)
             if not query:
                 results.append({"id": v.id, "status": "skipped"})
                 continue
@@ -269,6 +298,63 @@ async def geocode_venues(req: GeocodeVenuesRequest,
             except Exception as e:
                 results.append({"id": v.id, "status": "error", "message": str(e)[:200]})
     return {"results": results}
+
+
+# ── /api/v1/geocode-place (Mapbox autocomplete passthrough) ─────────────────
+
+@app.post("/api/v1/geocode-place")
+async def geocode_place(req: GeocodePlaceRequest,
+                        account: Account = Depends(get_current_account)):
+    """Forward-geocode a single user-typed query to a small list of city/region
+    suggestions. Used by the iOS app's trip-creation Location field for
+    autocomplete. Skipped for queries shorter than 2 chars to keep Mapbox
+    request volume sane during fast typing."""
+    import httpx
+
+    mapbox_token = os.getenv("MAPBOX_TOKEN", "").strip()
+    if not mapbox_token:
+        raise HTTPException(500, "MAPBOX_TOKEN not configured.")
+
+    query = (req.query or "").strip()
+    if len(query) < 2:
+        return {"suggestions": []}
+
+    limit = max(1, min(req.limit, 10))
+
+    async with httpx.AsyncClient(timeout=8.0) as client:
+        try:
+            resp = await client.get(
+                "https://api.mapbox.com/search/geocode/v6/forward",
+                params={
+                    "q": query,
+                    "access_token": mapbox_token,
+                    "limit": limit,
+                    # City-ish granularity. Skip POI/address (that's what
+                    # /geocode-venues is for).
+                    "types": "place,locality,region,district,country",
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(
+                502, f"Mapbox {e.response.status_code}: {e.response.text[:200]}",
+            )
+        except Exception as e:
+            raise HTTPException(502, f"Mapbox geocode failed: {e}")
+
+    suggestions = []
+    for f in (data.get("features") or [])[:limit]:
+        coords = (f.get("geometry") or {}).get("coordinates") or [None, None]
+        props = f.get("properties") or {}
+        suggestions.append({
+            "name": props.get("name") or "",
+            "full_address": props.get("full_address") or props.get("place_formatted") or "",
+            "latitude": coords[1],
+            "longitude": coords[0],
+            "place_id": props.get("mapbox_id"),
+        })
+    return {"suggestions": suggestions}
 
 
 # ── /api/v1/golf-course-lookup (golfcourseapi.com passthrough) ──────────────
