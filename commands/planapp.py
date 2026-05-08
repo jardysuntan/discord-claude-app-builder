@@ -40,7 +40,8 @@ using EXACTLY this structure:
   ],
   "navigation": {{
     "type": "bottom_tabs | drawer | stack",
-    "flow": "Brief description of how users move between screens"
+    "flow": "Brief description of how users move between screens",
+    "routes": ["Route1", "Route2", "...one entry per distinct screen or flow step"]
   }},
   "data_model": [
     {{
@@ -84,7 +85,8 @@ Output a JSON object with EXACTLY this structure (no markdown fences, just raw J
   ],
   "navigation": {{
     "type": "bottom_tabs | drawer | stack",
-    "flow": "Brief description of how users move between screens"
+    "flow": "Brief description of how users move between screens",
+    "routes": ["Route1", "Route2", "...one entry per distinct screen or flow step"]
   }},
   "data_model": [
     {{
@@ -261,6 +263,15 @@ def plan_to_buildapp_prompt(plan: dict) -> str:
     nav = plan.get("navigation", {})
     if nav:
         parts.append(f"\nNavigation: {nav.get('type', 'stack')} — {nav.get('flow', '')}")
+        routes = nav.get("routes", [])
+        if len(routes) >= 2:
+            parts.append("\nRoute state machine implementation:")
+            parts.append("- Define an `enum class Route { " + ", ".join(routes) + " }` in App.kt")
+            parts.append("- Track `var currentRoute by remember { mutableStateOf(Route." + routes[0] + ") }` as top-level state")
+            parts.append("- Render screens with `when (currentRoute) { ... }` — one branch per Route")
+            parts.append("- Create navigation helper functions (e.g. `navigateTo(route: Route)`) that update currentRoute")
+            parts.append("- For list→detail flows, store the selected item ID alongside the route (e.g. `var selectedId by remember { ... }`)")
+            parts.append("- Separate each screen into its own composable function or file for clarity")
 
     entities = plan.get("data_model", [])
     if entities:
