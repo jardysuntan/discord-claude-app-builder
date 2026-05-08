@@ -178,6 +178,65 @@ Instructions for the backend integration:
 - Use "camelCase" property names in data classes — they match the DB column names exactly.
 """
 
+    # Detect auth-related apps and inject Supabase Auth pattern
+    desc_lower = description.lower()
+    auth_keywords = {"login", "signup", "sign up", "sign in", "sign-in", "sign-up",
+                     "auth", "user account", "password", "register", "registration",
+                     "log in", "log-in"}
+    if any(kw in desc_lower for kw in auth_keywords) and schema_sql and sb_anon_key:
+        supabase_url = f"https://{sb_project_ref}.supabase.co"
+        base += f"""
+
+## Authentication (Supabase Auth)
+
+This app needs user authentication. Implement the following pattern:
+
+### AuthState sealed class
+Create a sealed class in a dedicated `model/AuthState.kt` file:
+- `Unknown` — initial state before checking stored session
+- `Unauthenticated` — no valid token
+- `Authenticated(userId: String, email: String, accessToken: String, refreshToken: String)`
+
+### AuthRepository
+Create an `AuthRepository` class that:
+1. Signs up via POST to `{supabase_url}/auth/v1/signup` with JSON body `{{"email": ..., "password": ...}}`
+2. Signs in via POST to `{supabase_url}/auth/v1/token?grant_type=password` with JSON body `{{"email": ..., "password": ...}}`
+3. Signs out via POST to `{supabase_url}/auth/v1/logout` with `Authorization: Bearer <accessToken>`
+4. Persists access token, refresh token, user ID, and email to platform storage
+5. Recovers session on app launch from stored tokens (`loadPersistedSession()`)
+6. Refreshes expired tokens via POST to `{supabase_url}/auth/v1/token?grant_type=refresh_token`
+7. Exposes auth state so the UI can observe it
+8. Includes all required headers: `apikey: <anon_key>`, `Content-Type: application/json`
+
+For token persistence, use an `expect`/`actual` `PlatformPreferences` that wraps
+SharedPreferences on Android, NSUserDefaults on iOS, and localStorage on WASM.
+
+### AuthScreen
+Create an `AuthScreen` composable with:
+- Sign In / Sign Up tab toggle
+- Email and password text fields with basic validation
+- Error message display for failed attempts
+- Loading indicator during network calls
+- Do NOT use emoji in the UI — use Material Icons instead
+
+### Auth-Gated Routing in App.kt
+Gate the main content behind authentication:
+- `AuthState.Unknown` → show a centered `CircularProgressIndicator`
+- `AuthState.Unauthenticated` → show `AuthScreen`
+- `AuthState.Authenticated` → show main app content (tabs/screens)
+
+On launch, call `authRepository.loadPersistedSession()` to restore previous login.
+
+### Sign Out
+Add a sign-out option in the app's settings or profile area.
+Sign out must: call the server logout endpoint, clear persisted tokens, and
+reset the UI back to `AuthScreen`.
+
+### Authenticated API Calls
+Once signed in, include the user's access token in all Supabase REST/RPC calls:
+`Authorization: Bearer <accessToken>` (instead of the anon key).
+"""
+
     return base
 
 
