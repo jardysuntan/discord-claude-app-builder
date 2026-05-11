@@ -104,6 +104,28 @@ Rules:
 - ALL primary keys must be uuid. ALL foreign keys must also be uuid and reference
   the uuid primary key. Never mix types (e.g. text FK → uuid PK).
 - Keep it minimal — only tables the app clearly needs.
+
+Multi-instance / multi-tenant pattern:
+If the app manages user-created instances (e.g. trips, projects, workspaces,
+teams, classrooms), apply this pattern:
+- Create a root instance table (e.g. `trips`) with: id UUID PK, name TEXT,
+  "joinCode" TEXT UNIQUE, "createdAt" TIMESTAMPTZ, "createdBy" TEXT.
+  Add an index on "joinCode".
+- Create a membership table (e.g. `trip_members`) with: id UUID PK,
+  "<instanceId>" UUID NOT NULL REFERENCES <instances>(id) ON DELETE CASCADE,
+  "userId" UUID, role TEXT DEFAULT 'member', "joinedAt" TIMESTAMPTZ DEFAULT now().
+  Add indexes on both "<instanceId>" and "userId".
+- Add a "<instanceId>" UUID NOT NULL REFERENCES <instances>(id) ON DELETE CASCADE
+  column to EVERY data table, with an index on it.
+- Create a scoped RPC `get_<instance>_config(p_<instance>_id UUID)` that returns
+  all data for one instance via json_build_object, filtering every sub-query with
+  WHERE "<instanceId>" = p_<instance>_id. Use COALESCE(..., '[]'::json) for arrays.
+- Create a lookup RPC `get_<instance>_by_join_code(p_join_code TEXT)` that returns
+  the instance row matching the join code.
+- Create a user-trips RPC `get_my_<instances>(p_user_id UUID)` that returns all
+  instances the user belongs to via the membership table.
+- Keep the original `get_app_config()` as a backward-compat wrapper that calls
+  the scoped RPC with the first instance.
 """
 
 
