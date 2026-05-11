@@ -127,7 +127,50 @@ Requirements:
 - Verify the code compiles for Android target first
 - IMPORTANT: Do NOT use emoji characters (Unicode emoji) in the UI. They render as broken boxes on the Web (WASM) target. Use Material Icons from `androidx.compose.material.icons.Icons` instead.
 
-Write complete, working code. No TODOs or placeholders."""
+Write complete, working code. No TODOs or placeholders.
+
+## UI States: Loading, Error, and Empty
+
+Every screen that displays data from the backend MUST handle three states:
+
+### Loading state
+Show a centered `CircularProgressIndicator()` while data is being fetched for
+the first time. Use a `hasLoadedOnce` flag to distinguish initial load from
+subsequent refreshes (don't flash a spinner on every refresh):
+```
+val isLoading by repository.isLoading.collectAsState()
+var hasLoadedOnce by remember {{ mutableStateOf(false) }}
+LaunchedEffect(data) {{ if (data != null) hasLoadedOnce = true }}
+when {{
+    !hasLoadedOnce && isLoading -> CircularProgressIndicator()
+    items.isEmpty() -> EmptyState(...)
+    else -> ContentList(...)
+}}
+```
+
+### Empty state
+When a list has zero items, show a composable with a Material Icon, a heading,
+and a body message. If the user can take action, include a button:
+```
+@Composable fun EmptyState(icon: ImageVector, title: String, body: String,
+    actionLabel: String? = null, onAction: (() -> Unit)? = null)
+```
+Example: icon = `Icons.Outlined.EventNote`, title = "No events yet",
+body = "Events will appear here once they're created."
+
+### Error state
+When a network call fails, show an inline error message with `AnimatedVisibility`
+so it fades in/out. Include a retry action:
+```
+var error by remember {{ mutableStateOf<String?>(null) }}
+AnimatedVisibility(visible = error != null, enter = fadeIn(), exit = fadeOut()) {{
+    Text(error ?: "", color = MaterialTheme.colorScheme.error)
+}}
+```
+For form screens (login, join code entry), set `isError = true` on the
+`TextField` and show the error message in `supportingText`.
+
+Do NOT silently swallow errors or show nothing when data is missing."""
 
     # Resolve Supabase creds
     sb_project_ref = config.SUPABASE_PROJECT_REF
