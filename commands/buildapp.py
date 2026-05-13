@@ -104,6 +104,21 @@ Rules:
 - ALL primary keys must be uuid. ALL foreign keys must also be uuid and reference
   the uuid primary key. Never mix types (e.g. text FK → uuid PK).
 - Keep it minimal — only tables the app clearly needs.
+
+Data integrity — constraints and indexes:
+- CHECK constraints: any column with a fixed set of valid values (status, type,
+  category, role) MUST have a CHECK constraint. Example:
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'active', 'completed'))
+  Also use CHECK for numeric ranges: CHECK (score BETWEEN 1 AND 100).
+- UNIQUE constraints: when a combination of columns forms a natural key (e.g. one
+  vote per user per poll, one score per player per hole), add a UNIQUE constraint
+  on those columns. Example: UNIQUE ("userId", "pollId")
+- ON DELETE CASCADE: every foreign key that points to a parent row the child
+  cannot exist without should specify ON DELETE CASCADE. Example:
+  "projectId" UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE
+- Indexes: add CREATE INDEX IF NOT EXISTS on columns frequently used in WHERE or
+  JOIN clauses — especially foreign keys and lookup codes. Example:
+  CREATE INDEX IF NOT EXISTS tasks_project_id_idx ON tasks ("projectId");
 """
 
 
