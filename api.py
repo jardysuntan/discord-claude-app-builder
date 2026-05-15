@@ -205,6 +205,30 @@ class ExtractDocTextRequest(BaseModel):
     base64: str
 
 
+class GeocodeVenueInput(BaseModel):
+    """Single venue to resolve via geocoding."""
+    id: str
+    name: str
+    address: str | None = None
+
+
+class GeocodeVenuesRequest(BaseModel):
+    """Batch geocoding request — one round-trip per import flow."""
+    venues: list[GeocodeVenueInput]
+
+
+class GolfCourseLookupInput(BaseModel):
+    """One course-name query for /api/v1/golf-course-lookup."""
+    id: str                       # caller-supplied (e.g. the venueId we'll bind to)
+    name: str                     # "Revere Golf Club — Concord course"
+    city: str | None = None       # optional disambiguator
+
+
+class GolfCourseLookupRequest(BaseModel):
+    """Batch golf-course lookup."""
+    courses: list[GolfCourseLookupInput]
+
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _require_admin(account: Account):
@@ -321,7 +345,18 @@ async def extract_structured(req: ExtractRequest,
     Response on success: {"data": <obj matching json_schema>, "provider": "...", "model": "..."}
     Response on error:   {"error": true, "error_message": "..."}
     """
+    import extract_limits
     from llm_providers import extract_json, detect_provider, list_providers
+
+    is_admin = account.role == "admin"
+    allowed, used, limit = extract_limits.check_and_consume(
+        account.account_id, is_admin=is_admin,
+    )
+    if not allowed:
+        raise HTTPException(
+            429,
+            f"Daily extract limit reached ({used}/{limit}). Try again tomorrow.",
+        )
 
     mgr = _get_account_mgr()
     cred = mgr.get_credential(account.account_id, "llm")
@@ -368,6 +403,18 @@ async def extract_doc_text(req: ExtractDocTextRequest,
     Request: {"filename": "<name.ext>", "base64": "<bytes>"}
     Response: {"text": "<extracted>", "pages": <int>} or HTTPException on failure.
     """
+    import extract_limits
+
+    is_admin = account.role == "admin"
+    allowed, used, limit = extract_limits.check_and_consume(
+        account.account_id, is_admin=is_admin,
+    )
+    if not allowed:
+        raise HTTPException(
+            429,
+            f"Daily extract limit reached ({used}/{limit}). Try again tomorrow.",
+        )
+
     import base64
     import io
 
@@ -413,6 +460,290 @@ async def extract_doc_text(req: ExtractDocTextRequest,
         return {"text": text, "pages": len(document.paragraphs)}
     except Exception as e:
         raise HTTPException(422, f"DOCX parse failed: {e}")
+
+
+@app.post("/api/v1/geocode-venues")
+async def geocode_venues(req: GeocodeVenuesRequest,
+                         account: Account = Depends(get_current_account)):
+    """
+    Batch-resolve venue name+address to lat/lng + canonical address via Mapbox.
+
+    Per-venue result has `status`:
+      "ok"         → latitude, longitude, canonical_address, place_id set
+      "not_found"  → Mapbox returned no features for the query
+      "error"      → transient failure; message in `message`
+      "skipped"    → empty input (nothing to geocode)
+
+    Caller keeps the returned `id` to merge results back into its venue list.
+    Admin-paid for now (uses bridge-side MAPBOX_TOKEN); will move to BYOK later.
+    """
+    import httpx
+
+    mapbox_token = os.getenv("MAPBOX_TOKEN", "").strip()
+    if not mapbox_token:
+        raise HTTPException(
+            500,
+            "MAPBOX_TOKEN not configured on bridge. Set it in .env and restart pm2.",
+        )
+
+    results: list[dict] = []
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        for v in req.venues:
+            query = ", ".join(p for p in (v.name.strip(), (v.address or "").strip()) if p)
+            if not query:
+                results.append({"id": v.id, "status": "skipped"})
+                continue
+            try:
+                resp = await client.get(
+                    "https://api.mapbox.com/search/geocode/v6/forward",
+                    params={
+                        "q": query,
+                        "access_token": mapbox_token,
+                        "limit": 1,
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                feats = data.get("features") or []
+                if not feats:
+                    results.append({"id": v.id, "status": "not_found", "query": query})
+                    continue
+                f = feats[0]
+                coords = (f.get("geometry") or {}).get("coordinates") or [None, None]
+                props = f.get("properties") or {}
+                results.append({
+                    "id": v.id,
+                    "status": "ok",
+                    "latitude": coords[1],
+                    "longitude": coords[0],
+                    "canonical_address": props.get("full_address") or props.get("place_formatted"),
+                    "place_id": props.get("mapbox_id"),
+                })
+            except httpx.HTTPStatusError as e:
+                results.append({
+                    "id": v.id,
+                    "status": "error",
+                    "message": f"Mapbox {e.response.status_code}: {e.response.text[:200]}",
+                })
+            except Exception as e:
+                results.append({"id": v.id, "status": "error", "message": str(e)[:200]})
+    return {"results": results}
+
+
+@app.post("/api/v1/golf-course-lookup")
+async def golf_course_lookup(req: GolfCourseLookupRequest,
+                             account: Account = Depends(get_current_account)):
+    """
+    Resolve a list of course names to canonical golfcourseapi.com data:
+    canonical name, lat/lng, address, and per-tee par + handicap-stroke-index
+    arrays for all 18 holes.
+
+    Per-course result has `status`:
+      "ok"        → canonical_name, latitude, longitude, address, tees[]
+      "ambiguous" → multiple plausible matches; `candidates[]` lists top 3
+      "not_found" → API returned no matches
+      "error"     → transient failure; message in `message`
+
+    Each tee entry: {tee_name, course_rating, slope, par_total, total_yards,
+                     pars: [18], stroke_indices: [18]}.
+
+    Admin-paid via bridge GOLF_COURSE_API_KEY env var; will move to BYOK when
+    user-side credentials grow that far.
+    """
+    import httpx
+
+    api_key = os.getenv("GOLF_COURSE_API_KEY", "").strip()
+    if not api_key:
+        raise HTTPException(
+            500,
+            "GOLF_COURSE_API_KEY not configured on bridge. Set in .env, restart pm2.",
+        )
+
+    headers = {"Authorization": f"Key {api_key}", "Accept": "application/json"}
+
+    def _normalize_tee(tee: dict) -> dict:
+        holes = tee.get("holes") or []
+        return {
+            "tee_name": tee.get("tee_name"),
+            "course_rating": tee.get("course_rating"),
+            "slope": tee.get("slope_rating"),
+            "par_total": tee.get("par_total"),
+            "total_yards": tee.get("total_yards"),
+            "number_of_holes": tee.get("number_of_holes"),
+            "pars": [h.get("par") for h in holes],
+            "stroke_indices": [h.get("handicap") for h in holes],
+            "yardages": [h.get("yardage") for h in holes],
+        }
+
+    def _course_to_record(course: dict) -> dict:
+        loc = course.get("location") or {}
+        male = course.get("tees", {}).get("male") or []
+        female = course.get("tees", {}).get("female") or []
+        # Prefer male tees as the default set, fall back to female. Caller can
+        # see all and let the user pick in review.
+        all_tees = (male if male else female)
+        # Canonical name: "<Club> — <Course>" except when the API returns
+        # club_name == course_name (e.g. Reflection Bay), where the dash
+        # variant produces "Reflection Bay Golf Club — Reflection Bay Golf
+        # Club". Fall back to the club name alone in that case.
+        club = (course.get("club_name") or "").strip()
+        coursename = (course.get("course_name") or "").strip()
+        if club and coursename and club.lower() != coursename.lower():
+            canonical = f"{club} — {coursename}"
+        else:
+            canonical = club or coursename
+        return {
+            "course_id": course.get("id"),
+            "canonical_name": canonical,
+            "club_name": course.get("club_name"),
+            "course_name": course.get("course_name"),
+            "address": loc.get("address"),
+            "latitude": loc.get("latitude"),
+            "longitude": loc.get("longitude"),
+            "tees": [_normalize_tee(t) for t in all_tees if t.get("holes")],
+        }
+
+    import asyncio, re
+
+    def _core_query(raw_name: str) -> str:
+        """Strip noise that confuses the search index.
+
+        The free GolfCourseAPI search is a phrase match — it does not handle
+        em-dashes, the literal word "course", or trailing city qualifiers
+        well. We narrow to the club name plus any sub-course token.
+        """
+        s = raw_name.replace("—", " ").replace("–", " ").replace("-", " ")
+        s = re.sub(r"\b(course|club|golf|country|the)\b", " ", s, flags=re.I)
+        s = re.sub(r"\s+", " ", s).strip()
+        return s or raw_name.strip()
+
+    async def _search_with_retry(client, query: str, max_retries: int = 4):
+        backoff = 1.5
+        for attempt in range(max_retries):
+            r = await client.get(
+                "https://api.golfcourseapi.com/v1/search",
+                params={"search_query": query},
+            )
+            if r.status_code == 429:
+                await asyncio.sleep(backoff)
+                backoff *= 2
+                continue
+            return r
+        return r  # last attempt's response
+
+    results: list[dict] = []
+    async with httpx.AsyncClient(timeout=20.0, headers=headers) as client:
+        for c in req.courses:
+            raw = c.name.strip()
+            queries = []
+            core = _core_query(raw)
+            queries.append(core)
+            # Sub-course token (e.g. "Concord" inside "Revere — Concord course")
+            sub = re.search(r"(?:—|–|-)\s*([A-Za-z]+)", raw)
+            if sub:
+                queries.append(f"{core} {sub.group(1)}")
+            queries.append(raw)  # last-resort: the literal user string
+            try:
+                candidates = []
+                last_query_used = queries[0]
+                for q in queries:
+                    last_query_used = q
+                    search = await _search_with_retry(client, q)
+                    if search.status_code != 200:
+                        # Surface only on the final query attempt
+                        if q == queries[-1]:
+                            results.append({
+                                "id": c.id, "status": "error",
+                                "message": f"search HTTP {search.status_code}: {search.text[:160]}",
+                            })
+                            candidates = "_FAILED_"
+                            break
+                        else:
+                            continue
+                    candidates = (search.json() or {}).get("courses") or []
+                    if candidates:
+                        break
+                if candidates == "_FAILED_":
+                    continue
+                if not candidates:
+                    results.append({
+                        "id": c.id, "status": "not_found", "query": last_query_used,
+                    })
+                    continue
+                # Throttle — free tier is harsh.
+                await asyncio.sleep(0.6)
+
+                # 2. Strict-match on the user-supplied name. If the query
+                # mentions both a club ("Revere") and a course ("Concord"),
+                # prefer the candidate whose course_name matches.
+                lower_name = c.name.lower()
+                def _score(course: dict) -> int:
+                    club = (course.get("club_name") or "").lower()
+                    cn   = (course.get("course_name") or "").lower()
+                    s = 0
+                    for tok in lower_name.replace("—", " ").replace("-", " ").split():
+                        if tok in club: s += 1
+                        if tok in cn:   s += 2  # course_name match outranks club match
+                    return s
+
+                ranked = sorted(candidates, key=_score, reverse=True)
+                best = ranked[0]
+                top_score = _score(best)
+                # If runner-up scores within 1, surface as ambiguous so the user
+                # picks in review.
+                runner_up_score = _score(ranked[1]) if len(ranked) > 1 else -1
+
+                if top_score == 0:
+                    results.append({
+                        "id": c.id, "status": "not_found", "query": query,
+                        "candidates": [
+                            {"course_id": ck.get("id"),
+                             "canonical_name": f"{ck.get('club_name')} — {ck.get('course_name')}".strip(" —"),
+                             "city": (ck.get("location") or {}).get("city"),
+                             "state": (ck.get("location") or {}).get("state")}
+                            for ck in ranked[:3]
+                        ],
+                    })
+                    continue
+
+                # 3. Fetch full detail (search payload sometimes truncates tees).
+                # Throttle the detail call too.
+                await asyncio.sleep(0.6)
+                detail = None
+                for attempt in range(4):
+                    detail = await client.get(
+                        f"https://api.golfcourseapi.com/v1/courses/{best['id']}"
+                    )
+                    if detail.status_code != 429:
+                        break
+                    await asyncio.sleep(1.5 * (2 ** attempt))
+                if detail.status_code != 200:
+                    # Fall back to whatever the search returned.
+                    rec = _course_to_record(best)
+                else:
+                    rec = _course_to_record((detail.json() or {}).get("course") or best)
+
+                rec["id"] = c.id
+                rec["status"] = "ambiguous" if runner_up_score >= top_score - 1 and len(ranked) > 1 else "ok"
+                if rec["status"] == "ambiguous":
+                    rec["candidates"] = [
+                        {"course_id": ck.get("id"),
+                         "canonical_name": f"{ck.get('club_name')} — {ck.get('course_name')}".strip(" —"),
+                         "city": (ck.get("location") or {}).get("city"),
+                         "state": (ck.get("location") or {}).get("state")}
+                        for ck in ranked[:3]
+                    ]
+                results.append(rec)
+
+            except httpx.HTTPStatusError as e:
+                results.append({
+                    "id": c.id, "status": "error",
+                    "message": f"golfcourseapi {e.response.status_code}: {e.response.text[:200]}",
+                })
+            except Exception as e:
+                results.append({"id": c.id, "status": "error", "message": str(e)[:200]})
+
+    return {"results": results}
 
 
 @app.post("/api/v1/account/keys")

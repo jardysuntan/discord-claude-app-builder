@@ -99,16 +99,23 @@ class GeocodeVenuesRequest(BaseModel):
 
 
 class GeocodePlaceRequest(BaseModel):
-    """Single-place autocomplete query for the trip-creation Location field.
+    """Single-place autocomplete query for trip / venue location fields.
 
     Distinct from /geocode-venues (which is a batch resolve for already-named
-    POIs). This one returns up to N suggestions for a free-text query so the
-    user can pick the right city. Limit kept small — autocomplete sends one
-    request per debounce tick.
+    POIs). This one returns up to N suggestions for a free-text query.
+
+    Optional proximity_lat/lng biases results toward a point (used by the
+    venue editor to prefer matches near the trip's main location). Optional
+    types overrides Mapbox's place-category filter — defaults to
+    "place,locality,region,district,country" for city-style autocomplete;
+    set to "poi,address,place" for venue search.
     """
 
     query: str
     limit: int = 5
+    proximity_lat: float | None = None
+    proximity_lng: float | None = None
+    types: str | None = None
 
 
 class GolfCourseLookupInput(BaseModel):
@@ -320,20 +327,40 @@ async def geocode_place(req: GeocodePlaceRequest,
         return {"suggestions": []}
 
     limit = max(1, min(req.limit, 10))
+    types = (req.types or "place,locality,region,district,country").strip()
+
+    # Endpoint selection:
+    #   - Search Box /forward supports POIs (restaurants, bars, businesses) AND
+    #     addresses + places — used when the caller asks for "poi" types.
+    #   - Geocode v6 /forward is address-/place-only and is what the trip
+    #     Location field uses ("place,locality,region,district,country").
+    # Mapbox dropped `poi` from geocode v6 in late 2025; before that this
+    # endpoint handled everything. The split keeps both code paths fast
+    # without forcing a session-token roundtrip for plain city lookups.
+    use_search_box = "poi" in types
+    if use_search_box:
+        url = "https://api.mapbox.com/search/searchbox/v1/forward"
+        # Search Box accepts the same types vocabulary minus `country` (uses
+        # `country` separately as a filter). We don't filter by country
+        # here, so pass everything through and let Mapbox 422 on truly
+        # bogus types — the broken case the v6 endpoint hit.
+        sbox_types = types
+    else:
+        url = "https://api.mapbox.com/search/geocode/v6/forward"
+        sbox_types = types
+    params: dict[str, str | int | float] = {
+        "q": query,
+        "access_token": mapbox_token,
+        "limit": limit,
+        "types": sbox_types,
+    }
+    if req.proximity_lat is not None and req.proximity_lng is not None:
+        # Mapbox proximity is lng,lat (not lat,lng).
+        params["proximity"] = f"{req.proximity_lng},{req.proximity_lat}"
 
     async with httpx.AsyncClient(timeout=8.0) as client:
         try:
-            resp = await client.get(
-                "https://api.mapbox.com/search/geocode/v6/forward",
-                params={
-                    "q": query,
-                    "access_token": mapbox_token,
-                    "limit": limit,
-                    # City-ish granularity. Skip POI/address (that's what
-                    # /geocode-venues is for).
-                    "types": "place,locality,region,district,country",
-                },
-            )
+            resp = await client.get(url, params=params)
             resp.raise_for_status()
             data = resp.json()
         except httpx.HTTPStatusError as e:

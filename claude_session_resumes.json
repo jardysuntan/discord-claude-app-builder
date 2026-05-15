@@ -1,7 +1,6 @@
 {
   "presently": 8,
   "pomodorotimer": 8,
-  "_planapp": 8,
   "tabidachi": 8,
   "puppygrowth": 8,
   "novalifepuppy": 8,
@@ -11,13 +10,17 @@
   "smoketestmap": 8,
   "smoketestvideo": 8,
   "lifedashboard": 8,
-  "jabluehq": 8,
   "photo-sorter": 8,
   "photoreviewerphoto": 8,
   "photoreviewerkmpbased": 8,
   "healthbrain": 8,
-  "yangzihesobachmobile": 8,
   "smoketestcounter10": 1,
   "smoketestmap5": 1,
-  "smoketestvideo4": 1
+  "smoketestvideo4": 1,
+  "jabluehq": 1,
+  "yangzihesobachmobile": 1,
+  "wesobach-plan": 8,
+  "wesobach": 8,
+  "weresobachbottest": 8,
+  "_planapp": 8
 }

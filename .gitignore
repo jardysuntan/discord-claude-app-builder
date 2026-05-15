@@ -52,3 +52,4 @@ worklog.md
 
 # Nightly research (machine-specific)
 scripts/nightly-research.sh
+extract_limits.json
