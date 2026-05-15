@@ -127,7 +127,61 @@ Requirements:
 - Verify the code compiles for Android target first
 - IMPORTANT: Do NOT use emoji characters (Unicode emoji) in the UI. They render as broken boxes on the Web (WASM) target. Use Material Icons from `androidx.compose.material.icons.Icons` instead.
 
-Write complete, working code. No TODOs or placeholders."""
+Write complete, working code. No TODOs or placeholders.
+
+## User Feedback: Snackbar and Confirmation Dialogs
+
+Every app needs two feedback patterns — teach them from the start:
+
+### Snackbar for transient messages
+Set up a SnackbarHost at the App.kt root level (inside the root Box/Scaffold,
+aligned to BottomCenter). Create a `showSnackbar: (String) -> Unit` lambda
+using rememberCoroutineScope + SnackbarHostState and pass it down to screens
+that perform mutations. Use it for:
+- Success feedback after writes: "Saved", "Deleted", "Link copied"
+- Non-blocking errors: "Could not save — check your connection"
+
+Example wiring in App.kt:
+```kotlin
+val snackbarHostState = remember { SnackbarHostState() }
+val scope = rememberCoroutineScope()
+val showSnackbar: (String) -> Unit = { msg ->
+    scope.launch { snackbarHostState.showSnackbar(msg) }
+}
+// ... inside the root Box:
+SnackbarHost(
+    hostState = snackbarHostState,
+    modifier = Modifier.align(Alignment.BottomCenter)
+)
+```
+
+### AlertDialog for destructive actions
+Before any destructive action (delete, leave, sign out, reset), show an
+AlertDialog with a clear title, explanation of consequences, and
+confirm/dismiss buttons. Guard the confirm button with a loading indicator
+if the action is async. Pattern:
+```kotlin
+var showDeleteDialog by remember { mutableStateOf(false) }
+if (showDeleteDialog) {
+    AlertDialog(
+        onDismissRequest = { showDeleteDialog = false },
+        title = { Text("Delete item?") },
+        text = { Text("This cannot be undone.") },
+        confirmButton = {
+            TextButton(onClick = { /* perform delete, then showSnackbar("Deleted") */ }) {
+                Text("Delete")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = { showDeleteDialog = false }) { Text("Cancel") }
+        }
+    )
+}
+```
+
+Do NOT skip feedback — every user-triggered mutation must produce visible
+confirmation via Snackbar, and every destructive action must require
+confirmation via AlertDialog."""
 
     # Resolve Supabase creds
     sb_project_ref = config.SUPABASE_PROJECT_REF
