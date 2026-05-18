@@ -21,9 +21,10 @@
           </a>
         </div>
         <p class="brand-tagline">
-          Every commit to the hand-built app is rebuilt by the Claude bot, diffed against the original, and surfaced back as a PR so the bot keeps learning.
+          Two parallel feedback loops keep the Claude app-builder bot learning from the hand-built north-star app. <strong>Parity loop</strong>: each commit on the real app is re-implemented by the bot in a sandbox, audited for gaps, and patched back via PR. <strong>Lessons loop</strong>: every reusable rule we discover while building the real app gets absorbed into the bot's scaffolding templates so the next app it generates ships with the lesson baked in.
         </p>
         <div class="brand-sub">
+          <span class="track-label">Parity loop:</span>
           <a href="https://github.com/jardysuntan/weresobach" target="_blank" rel="noopener">weresobach</a>
           <span class="arrow">→</span>
           <a href="https://github.com/jardysuntan/discord-claude-app-builder" target="_blank" rel="noopener" title="discord-claude-app-builder — the Claude-driven bot that generates apps from Discord prompts">bot</a>
@@ -32,9 +33,19 @@
           <span class="arrow">→</span>
           <a href="https://github.com/jardysuntan/weresobachbottest/actions/workflows/gap-audit.yml" target="_blank" rel="noopener" title="Gap auditor — fingerprints bottest against weresobach">audit</a>
           <span class="arrow">→</span>
-          <a href="https://github.com/jardysuntan/discord-claude-app-builder/pulls" target="_blank" rel="noopener">bridge PR</a>
+          <a href="https://github.com/jardysuntan/discord-claude-app-builder/pulls" target="_blank" rel="noopener">bot PR</a>
           <span class="arrow">↻</span>
           <a href="https://github.com/jardysuntan/discord-claude-app-builder/actions/workflows/path-b-verify.yml" target="_blank" rel="noopener" title="Phase 4 verify — re-runs Phase 2 up to 5× until bottest closes the gap">verify</a>
+        </div>
+        <div class="brand-sub">
+          <span class="track-label">Lessons loop:</span>
+          <span title="user-feedback memories written while building weresobach (~/.claude/projects/.../memory/feedback_*.md)">WSB feedback memory</span>
+          <span class="arrow">→</span>
+          <a href="https://github.com/jardysuntan/discord-claude-app-builder/actions/workflows/path-b-learnings.yml" target="_blank" rel="noopener" title="path-b-learnings — Mon 11:00 UTC cron + workflow_dispatch">absorb workflow</a>
+          <span class="arrow">→</span>
+          <a href="https://github.com/jardysuntan/discord-claude-app-builder/pulls?q=is%3Apr+absorb%28" target="_blank" rel="noopener" title="Draft PRs titled absorb(...): the bot's proposed template edit">template PR</a>
+          <span class="arrow">→</span>
+          <span title="Future apps the bot scaffolds inherit the lesson via the CLAUDE.md template in commands/create.py">future apps inherit</span>
         </div>
       </div>
       <div class="controls">
@@ -49,7 +60,7 @@
 
     <section class="legend" aria-label="Pipeline stages">
       <details open>
-        <summary>How the pipeline works</summary>
+        <summary>How the parity loop works (per-commit feature replication)</summary>
         <div class="legend-grid">
           <div class="legend-item">
             <div class="legend-icon commit">●</div>
@@ -109,6 +120,78 @@
             </div>
           </div>
         </div>
+      </details>
+    </section>
+
+    <section class="legend" aria-label="Lessons loop stages">
+      <details>
+        <summary>How the lessons loop works (durable rules → bot templates)</summary>
+        <p class="legend-intro">
+          Parity proves the bot <em>can</em> rebuild a specific commit. The lessons loop teaches the bot rules that should apply to <em>every</em> future app — so each new project Discord users start inherits the gotchas we already worked through on the real one.
+        </p>
+        <div class="legend-grid">
+          <div class="legend-item">
+            <div class="legend-icon commit">●</div>
+            <div class="legend-name">Memory captured</div>
+            <div class="legend-eli5">While building the real app, a recurring rule comes up — a UI gotcha, a serialization trap, a permission default. It gets written down as a small memory file.</div>
+            <div class="legend-desc">
+              <span class="legend-tech-label">Technically:</span>
+              A <code>feedback_*.md</code> file lands in <code>~/.claude/projects/&lt;bridge&gt;/memory/</code> on the Mac mini. Lives outside any git repo — these are Claude Code's auto-memory.
+            </div>
+          </div>
+          <div class="legend-item">
+            <div class="legend-icon sync">●</div>
+            <div class="legend-name">Absorb workflow</div>
+            <div class="legend-eli5">Once a week (or on demand) the system picks the newest unabsorbed memory and asks the bot to add it to its own scaffolding template.</div>
+            <div class="legend-desc">
+              <span class="legend-tech-label">Technically:</span>
+              <a href="https://github.com/jardysuntan/discord-claude-app-builder/actions/workflows/path-b-learnings.yml" target="_blank" rel="noopener">path-b-learnings.yml</a>
+              runs on the self-hosted Mac mini runner, reads the memory file, and runs Claude with edit permission against this repo's <code>commands/create.py</code> + <code>helpers/</code>.
+            </div>
+          </div>
+          <div class="legend-item">
+            <div class="legend-icon pr">●</div>
+            <div class="legend-name">Template PR</div>
+            <div class="legend-eli5">The bot's proposed edit shows up as a draft pull request titled <code>absorb(memory_name)</code>. You read it, decide whether the bot understood the lesson, then merge or close.</div>
+            <div class="legend-desc">
+              <span class="legend-tech-label">Technically:</span>
+              Draft PR on <a href="https://github.com/jardysuntan/discord-claude-app-builder/pulls?q=is%3Apr+absorb%28" target="_blank" rel="noopener">discord-claude-app-builder</a>. PR body inlines the full memory body so you can sanity-check the absorption without leaving the page.
+            </div>
+          </div>
+          <div class="legend-item">
+            <div class="legend-icon verify">●</div>
+            <div class="legend-name">Future apps inherit</div>
+            <div class="legend-eli5">After merge, the next time someone in Discord asks the bot to build an app, the bot writes a CLAUDE.md that already knows the rule.</div>
+            <div class="legend-desc">
+              <span class="legend-tech-label">Technically:</span>
+              The CLAUDE.md template lives as an f-string inside <a href="https://github.com/jardysuntan/discord-claude-app-builder/blob/main/commands/create.py" target="_blank" rel="noopener"><code>commands/create.py</code></a>. Each new <code>/create</code> writes the current version of that template into the new project.
+            </div>
+          </div>
+          <div class="legend-item">
+            <div class="legend-icon audit">●</div>
+            <div class="legend-name">Skip rule</div>
+            <div class="legend-eli5">If a memory already has a PR (open, merged, or closed-as-rejected), the absorb workflow skips it next time.</div>
+            <div class="legend-desc">
+              <span class="legend-tech-label">Technically:</span>
+              The pick step calls <code>gh pr list --search "absorb(&lt;basename&gt;) in:title"</code>. Closing a misread absorption rejects it permanently; reopening or deleting the PR makes the memory eligible again.
+            </div>
+          </div>
+        </div>
+      </details>
+    </section>
+
+    <section class="legend" aria-label="Status — May 2026">
+      <details>
+        <summary>Status (May 2026) — what was just fixed</summary>
+        <p class="legend-intro">
+          Path B's parity loop was silently noop'ing from 2026-05-04 through 2026-05-17. Two-stage diagnosis and fix:
+        </p>
+        <ul class="legend-status-list">
+          <li><strong>Workflow parsing crash:</strong> the sync workflow interpolated multi-line commit messages directly into bash, so commits whose body contained quotes + parens (e.g. <code>"Set up teams" / "Manage teams (N)"</code>) failed in 7s. Now passed via env var.</li>
+          <li><strong>Multi-commit pushes skipped feat commits:</strong> the decide-step only looked at <code>head_commit</code>. When a feat landed under a later <code>chore(ios): bump</code> in the same push, the chore won. Now scans the whole push range via <code>gh api compare</code>.</li>
+          <li><strong>Bot was producing empty diffs:</strong> bottest was a 6-file Kotlin skeleton, so the bot — handed 200KB of feature diffs targeting files that didn't exist — concluded "skip parts already done" and returned text instead of edits. Bottest has now been reseeded with WSB's full <code>commonMain</code> source plus Supabase migrations 001–016 (package rename <code>com.weressobach.app → com.jaredtan.wesobach</code>), so future syncs patch a real codebase.</li>
+          <li><strong>Lessons loop is new:</strong> <code>path-b-learnings.yml</code> is the pivot. The parity loop still runs; lessons loop runs alongside it.</li>
+        </ul>
       </details>
     </section>
 

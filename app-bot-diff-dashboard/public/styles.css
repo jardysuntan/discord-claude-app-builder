@@ -175,6 +175,31 @@ html, body {
 }
 .brand-sub a:hover { text-decoration: underline; }
 
+.brand-sub .track-label {
+  color: var(--text-dim);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  margin-right: 2px;
+  opacity: 0.85;
+}
+
+.legend-intro {
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.55;
+  margin: 8px 0 12px;
+}
+
+.legend-status-list {
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+.legend-status-list li { margin-bottom: 6px; }
+.legend-status-list strong { color: var(--text); }
+
 .legend {
   max-width: 1400px;
   margin: 16px auto 0;

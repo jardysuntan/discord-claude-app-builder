@@ -1,0 +1,243 @@
+name: Path B learnings (absorb WSB feedback into bot templates)
+
+# Pivot of Path B: instead of (only) verifying feature parity against bottest,
+# this workflow teaches the app-builder bot itself. WSB development surfaces
+# generalisable lessons captured as `feedback_*.md` memory entries on the
+# Mac mini. This workflow picks one, asks Claude to update the bot's
+# CLAUDE.md template / helpers / slash-command code so future apps the bot
+# scaffolds avoid the same pitfall, then opens a PR for human review.
+#
+# Runs on the self-hosted Mac mini runner because:
+#   - Memory files live locally at ~/.claude/projects/<bridge>/memory/.
+#   - The `claude` CLI is already configured there with the right credentials.
+#
+# Output: a draft PR against this repo with a small focused diff plus the
+# memory body inline so the reviewer can sanity-check the absorption.
+
+on:
+  schedule:
+    # Monday 11:00 UTC — once a week pass over un-absorbed feedback memories.
+    - cron: '0 11 * * 1'
+  workflow_dispatch:
+    inputs:
+      memory_file:
+        description: Specific memory basename to absorb (e.g. feedback_kotlinx_encode_defaults_silent_elision.md). Blank = pick latest un-absorbed.
+        required: false
+        default: ""
+      dry_run:
+        description: If true, write the proposed diff as a workflow artifact instead of opening a PR.
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: path-b-learnings
+  cancel-in-progress: false
+
+jobs:
+  absorb:
+    runs-on: [self-hosted, macos, mini, bridge]
+    timeout-minutes: 30
+    env:
+      MEMORY_DIR: /Users/jaredtanpersonal/.claude/projects/-Users-jaredtanpersonal-bots-discord-claude-bridge/memory
+    steps:
+      - name: Checkout bridge repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Token with contents:write + pull-requests:write on this repo so we
+          # can push a branch and open the PR. Reuses the verify token.
+          token: ${{ secrets.PATH_B_VERIFY_TOKEN }}
+
+      - name: Pick a memory to absorb
+        id: pick
+        env:
+          REQUESTED: ${{ inputs.memory_file }}
+        run: |
+          set -eo pipefail
+          if [ -n "$REQUESTED" ]; then
+            CANDIDATE="$MEMORY_DIR/$REQUESTED"
+            if [ ! -f "$CANDIDATE" ]; then
+              echo "::error::Requested memory not found: $CANDIDATE"
+              exit 1
+            fi
+            echo "memory_path=$CANDIDATE" >> "$GITHUB_OUTPUT"
+            echo "memory_basename=$REQUESTED" >> "$GITHUB_OUTPUT"
+            echo "skip=no" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Auto-pick: feedback_*.md sorted newest-first, skip any that already
+          # have an open OR merged PR titled `absorb(<basename>): ...`.
+          for f in $(ls -t "$MEMORY_DIR"/feedback_*.md 2>/dev/null); do
+            base=$(basename "$f")
+            # `gh pr list --state all` covers open/closed/merged.
+            if ! gh pr list --state all --search "absorb($base) in:title" --json number --jq 'length' \
+                 | grep -q '^[1-9]'; then
+              echo "memory_path=$f" >> "$GITHUB_OUTPUT"
+              echo "memory_basename=$base" >> "$GITHUB_OUTPUT"
+              echo "skip=no" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "No un-absorbed feedback memories — all caught up."
+          echo "skip=yes" >> "$GITHUB_OUTPUT"
+
+      - name: Build absorb prompt
+        if: steps.pick.outputs.skip != 'yes'
+        id: prompt
+        env:
+          MEMORY_PATH: ${{ steps.pick.outputs.memory_path }}
+          MEMORY_BASE: ${{ steps.pick.outputs.memory_basename }}
+        run: |
+          set -eo pipefail
+          python3 <<'PY'
+          import json, os
+          mem_path = os.environ['MEMORY_PATH']
+          mem_base = os.environ['MEMORY_BASE']
+          body = open(mem_path).read()
+          prompt = (
+              "A learning from the hand-built WereSoBach app needs to be absorbed into "
+              "THIS app-builder bot. The bot's job is to scaffold new Kotlin Multiplatform "
+              "(Compose Multiplatform) apps from Discord prompts. Whatever it learns "
+              "should make future apps it scaffolds better.\n\n"
+              "Here is the learning, captured as a user-feedback memory entry:\n\n"
+              f"--- BEGIN MEMORY ({mem_base}) ---\n"
+              f"{body}\n"
+              f"--- END MEMORY ({mem_base}) ---\n\n"
+              "Your job: make a SMALL, FOCUSED edit to this bot's source so that future "
+              "scaffolded apps avoid this pitfall. Concretely:\n\n"
+              "1. The bot writes a CLAUDE.md file into every new app it creates. The text "
+              "of that CLAUDE.md is built as an f-string inside `commands/create.py` (search "
+              "for `claude_md.write_text`). If the learning is a coding rule or platform "
+              "gotcha, add a short concrete bullet/section to that template.\n\n"
+              "2. If the learning is a recurring runtime issue, consider whether a helper "
+              "module under `helpers/` should be added or extended. Don't over-build — "
+              "no helper unless the lesson is concretely actionable in Python.\n\n"
+              "3. If the learning is about how the BOT itself operates (build cadence, "
+              "git workflow, store-publish rules), update the relevant slash command "
+              "under `commands/`.\n\n"
+              "Constraints:\n"
+              "- Make at most one or two file changes. No surrounding refactor.\n"
+              "- Phrase additions concisely; the CLAUDE.md template is already large.\n"
+              "- Don't introduce abstractions or new helpers unless the learning needs them.\n"
+              "- If the learning doesn't translate to a useful template change (e.g. it's "
+              "specific to one app's domain), leave the repo untouched and print a single "
+              "line: `NO_CHANGE: <one-sentence reason>`. The workflow will record this and "
+              "skip opening a PR.\n\n"
+              "After editing, run `git diff --stat` and print the file list so the "
+              "workflow can show it in the PR body."
+          )
+          json.dump({"prompt": prompt}, open('/tmp/learn-prompt.json', 'w'))
+          print(f"prompt_bytes={len(prompt)}")
+          PY
+
+      - name: Run Claude against this repo
+        if: steps.pick.outputs.skip != 'yes'
+        env:
+          CLAUDE_BIN: /Users/jaredtanpersonal/.claude/local/claude
+        run: |
+          set -eo pipefail
+          prompt_text=$(python3 -c "import json; print(json.load(open('/tmp/learn-prompt.json'))['prompt'])")
+          # No --resume — fresh session per absorption so no context bleed.
+          # Output stream-json so we can capture the final "result" event.
+          "$CLAUDE_BIN" --dangerously-skip-permissions -p \
+            --output-format stream-json --verbose \
+            "$prompt_text" \
+            2> /tmp/learn-stderr.log \
+            | tee /tmp/learn-stream.json \
+            | python3 -c "
+          import json, sys
+          for line in sys.stdin:
+              try:
+                  ev = json.loads(line)
+                  if ev.get('type') == 'result':
+                      print('--- final result ---')
+                      print(ev.get('result', '')[:4000])
+              except Exception:
+                  pass
+          "
+
+      - name: Decide PR vs no-change
+        if: steps.pick.outputs.skip != 'yes'
+        id: outcome
+        run: |
+          set -eo pipefail
+          if [ -z "$(git status --porcelain)" ]; then
+            # Bot may have printed NO_CHANGE — record but don't PR.
+            REASON=$(grep -E '^NO_CHANGE:' /tmp/learn-stream.json 2>/dev/null | head -1 || echo "no diff produced")
+            echo "Bot produced no diff. Reason: $REASON"
+            echo "open_pr=no" >> "$GITHUB_OUTPUT"
+            echo "reason=$REASON" >> "$GITHUB_OUTPUT"
+          else
+            echo "open_pr=yes" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open PR
+        if: steps.pick.outputs.skip != 'yes' && steps.outcome.outputs.open_pr == 'yes' && inputs.dry_run != true
+        env:
+          GH_TOKEN: ${{ secrets.PATH_B_VERIFY_TOKEN }}
+          MEMORY_PATH: ${{ steps.pick.outputs.memory_path }}
+          MEMORY_BASE: ${{ steps.pick.outputs.memory_basename }}
+        run: |
+          set -eo pipefail
+          BR="learnings/$(echo "$MEMORY_BASE" | sed -e 's/\.md$//' -e 's/^feedback_//' | tr '_' '-')-$(date +%Y%m%d-%H%M%S)"
+          git config user.name "path-b-learnings"
+          git config user.email "path-b-learnings@users.noreply.github.com"
+          git checkout -b "$BR"
+          git add -A
+          DIFF_STAT=$(git diff --cached --stat)
+          git commit -m "absorb($MEMORY_BASE): teach bot templates this lesson
+
+          Auto-generated by path-b-learnings.yml.
+
+          Memory source: $MEMORY_BASE
+          Diff stat:
+          $DIFF_STAT
+          "
+          git push origin "$BR"
+          MEM_BODY=$(cat "$MEMORY_PATH")
+          gh pr create \
+            --draft \
+            --base main \
+            --head "$BR" \
+            --title "absorb($MEMORY_BASE): teach bot templates" \
+            --body "$(cat <<EOF
+          ## Absorbed learning
+
+          Source: \`$MEMORY_BASE\` (WSB feedback memory)
+
+          ### Memory body
+
+          \`\`\`
+          $MEM_BODY
+          \`\`\`
+
+          ### Bot's proposed template edit
+
+          \`\`\`
+          $DIFF_STAT
+          \`\`\`
+
+          Review the diff. Merge if it makes sense for **future** apps the bot scaffolds. If the bot misread the lesson, close this PR — the workflow will skip this memory next time as long as a closed PR exists for it.
+          EOF
+          )"
+
+      - name: Upload diff as artifact (dry-run)
+        if: steps.pick.outputs.skip != 'yes' && steps.outcome.outputs.open_pr == 'yes' && inputs.dry_run == true
+        run: |
+          set -eo pipefail
+          git diff > /tmp/learn-diff.patch
+          mkdir -p /tmp/learn-out
+          cp /tmp/learn-diff.patch /tmp/learn-out/
+          cp /tmp/learn-stream.json /tmp/learn-out/ 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        if: steps.pick.outputs.skip != 'yes' && steps.outcome.outputs.open_pr == 'yes' && inputs.dry_run == true
+        with:
+          name: absorb-${{ steps.pick.outputs.memory_basename }}
+          path: /tmp/learn-out/
+
+      - name: Reset working tree
+        if: always()
+        run: |
+          git reset --hard HEAD 2>/dev/null || true
+          git clean -fd 2>/dev/null || true
