@@ -76,11 +76,16 @@ class ExtractRequest(BaseModel):
     model: str | None = None
     system_prompt: str | None = None
     temperature: float = 0.1
+    # Per-user identifier for daily-cap accounting. Client should pass the
+    # Supabase auth user id when signed in, otherwise the device guest id.
+    # When absent, only account + global caps apply (legacy callers).
+    creator_id: str | None = None
 
 
 class ExtractDocTextRequest(BaseModel):
     filename: str
     base64: str
+    creator_id: str | None = None
 
 
 class GeocodeVenueInput(BaseModel):
@@ -132,6 +137,7 @@ class ClassifyHousingRequest(BaseModel):
     text: str
     provider: str | None = None
     model: str | None = None
+    creator_id: str | None = None
 
 
 # ── /api/v1/extract ─────────────────────────────────────────────────────────
@@ -144,7 +150,9 @@ async def extract_structured(req: ExtractRequest,
 
     is_admin = account.role == "admin"
     allowed, used, limit = extract_limits.check_and_consume(
-        account.account_id, is_admin=is_admin,
+        account.account_id,
+        is_admin=is_admin,
+        creator_id=getattr(req, "creator_id", None),
     )
     if not allowed:
         raise HTTPException(
@@ -152,15 +160,29 @@ async def extract_structured(req: ExtractRequest,
             f"Daily extract limit reached ({used}/{limit}). Try again tomorrow.",
         )
 
-    mgr = _get_account_mgr()
-    cred = mgr.get_credential(account.account_id, "llm")
-    if not cred or not cred.get("api_key"):
+    # LLM key resolution chain:
+    #   1. DEFAULT_LLM_API_KEY env var (Fly secret) — the shared default.
+    #      Wins when set so every TestFlight / App Store user automatically
+    #      uses the dev's Gemini key without any client-side setup.
+    #   2. Per-account credential — fallback when the env var is absent.
+    #      Lets the bridge keep working in a BYOK posture if the dev's
+    #      Gemini key is ever revoked / not yet provisioned.
+    #   3. None → 400. extract_limits.py still caps per-account + global
+    #      daily (50 + 100/day defaults) so the shared default can't be
+    #      drained by abuse.
+    import os
+    api_key = os.environ.get("DEFAULT_LLM_API_KEY")
+    if not api_key:
+        mgr = _get_account_mgr()
+        cred = mgr.get_credential(account.account_id, "llm")
+        api_key = (cred or {}).get("api_key")
+    if not api_key:
         raise HTTPException(
             400,
-            "No LLM credential set. POST /api/v1/account/credentials/llm with "
-            '{"data": {"api_key": "sk-..."}} on the parent bridge first.',
+            "No LLM credential available. Set DEFAULT_LLM_API_KEY on the bridge, "
+            "or POST /api/v1/account/credentials/llm with "
+            '{"data": {"api_key": "..."}} on the parent bridge first.',
         )
-    api_key = cred["api_key"]
 
     provider = req.provider or detect_provider(api_key)
     if not provider:
@@ -191,7 +213,9 @@ async def extract_doc_text(req: ExtractDocTextRequest,
 
     is_admin = account.role == "admin"
     allowed, used, limit = extract_limits.check_and_consume(
-        account.account_id, is_admin=is_admin,
+        account.account_id,
+        is_admin=is_admin,
+        creator_id=getattr(req, "creator_id", None),
     )
     if not allowed:
         raise HTTPException(
@@ -251,6 +275,19 @@ async def extract_doc_text(req: ExtractDocTextRequest,
 @app.post("/api/v1/geocode-venues")
 async def geocode_venues(req: GeocodeVenuesRequest,
                          account: Account = Depends(get_current_account)):
+    """Batch-resolve venue names to lat/lng + canonical address.
+
+    Uses Mapbox **Search Box** /search/searchbox/v1/forward (not the v6
+    geocoder) so we get POI-level results — actual restaurant / hotel /
+    club addresses instead of city centroids. v6 dropped POI support
+    late 2025, so v6 with "Carbone Las Vegas" returns "Las Vegas, NV"
+    not the Carbone POI. Search Box with types=poi,address,place keeps
+    POIs first, falls back to street addresses, then places.
+
+    trip_location ("Las Vegas, NV") is appended to the query when the
+    venue text doesn't already mention the city — keeps Mapbox's global
+    ranking from picking the wrong-country branch of generic chains.
+    """
     import httpx
 
     mapbox_token = os.getenv("MAPBOX_TOKEN", "").strip()
@@ -262,9 +299,6 @@ async def geocode_venues(req: GeocodeVenuesRequest,
     async with httpx.AsyncClient(timeout=10.0) as client:
         for v in req.venues:
             parts = [v.name.strip(), (v.address or "").strip()]
-            # If the venue extraction had no address, append the trip's own
-            # location as a region hint. Skip the append when the venue's
-            # address already names a city (avoids "Las Vegas, NV, Las Vegas, NV").
             has_city_hint = any(
                 trip_loc and trip_loc.lower().split(",")[0].strip() in p.lower()
                 for p in parts if p
@@ -277,8 +311,18 @@ async def geocode_venues(req: GeocodeVenuesRequest,
                 continue
             try:
                 resp = await client.get(
-                    "https://api.mapbox.com/search/geocode/v6/forward",
-                    params={"q": query, "access_token": mapbox_token, "limit": 1},
+                    "https://api.mapbox.com/search/searchbox/v1/forward",
+                    params={
+                        "q": query,
+                        "access_token": mapbox_token,
+                        "limit": 1,
+                        # POI first, then address, then place. Critical
+                        # for getting actual venue locations rather than
+                        # city centroids. Note: Search Box /forward does
+                        # NOT accept session_token — that param is only
+                        # for the two-step /suggest + /retrieve flow.
+                        "types": "poi,address,place",
+                    },
                 )
                 resp.raise_for_status()
                 data = resp.json()
@@ -294,8 +338,14 @@ async def geocode_venues(req: GeocodeVenuesRequest,
                     "status": "ok",
                     "latitude": coords[1],
                     "longitude": coords[0],
+                    # Search Box returns full_address for POIs (with the
+                    # specific street + city + state) and place_formatted
+                    # as a fallback for places without a full address.
                     "canonical_address": props.get("full_address") or props.get("place_formatted"),
                     "place_id": props.get("mapbox_id"),
+                    # Useful for downstream caller display — POI features
+                    # have a `feature_type` of "poi", places have "place".
+                    "feature_type": props.get("feature_type"),
                 })
             except httpx.HTTPStatusError as e:
                 results.append({
@@ -615,15 +665,29 @@ async def classify_housing(req: ClassifyHousingRequest,
     if len(text) > 20_000:
         raise HTTPException(413, "Text too long (>20k chars).")
 
-    mgr = _get_account_mgr()
-    cred = mgr.get_credential(account.account_id, "llm")
-    if not cred or not cred.get("api_key"):
+    # LLM key resolution chain:
+    #   1. DEFAULT_LLM_API_KEY env var (Fly secret) — the shared default.
+    #      Wins when set so every TestFlight / App Store user automatically
+    #      uses the dev's Gemini key without any client-side setup.
+    #   2. Per-account credential — fallback when the env var is absent.
+    #      Lets the bridge keep working in a BYOK posture if the dev's
+    #      Gemini key is ever revoked / not yet provisioned.
+    #   3. None → 400. extract_limits.py still caps per-account + global
+    #      daily (50 + 100/day defaults) so the shared default can't be
+    #      drained by abuse.
+    import os
+    api_key = os.environ.get("DEFAULT_LLM_API_KEY")
+    if not api_key:
+        mgr = _get_account_mgr()
+        cred = mgr.get_credential(account.account_id, "llm")
+        api_key = (cred or {}).get("api_key")
+    if not api_key:
         raise HTTPException(
             400,
-            "No LLM credential set. POST /api/v1/account/credentials/llm with "
-            '{"data": {"api_key": "sk-..."}} on the parent bridge first.',
+            "No LLM credential available. Set DEFAULT_LLM_API_KEY on the bridge, "
+            "or POST /api/v1/account/credentials/llm with "
+            '{"data": {"api_key": "..."}} on the parent bridge first.',
         )
-    api_key = cred["api_key"]
 
     provider = req.provider or detect_provider(api_key)
     if not provider:
