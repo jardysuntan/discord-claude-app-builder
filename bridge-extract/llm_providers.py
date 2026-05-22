@@ -299,7 +299,13 @@ _PROVIDER_TPM_BUDGET: dict[str, int] = {
     "groq":      5500,    # free tier ranges 6K–12K depending on the model + org
     "openai":    25000,
     "anthropic": 40000,
-    "gemini":    250000,  # actual quota is ~1M; we cap to keep one call snappy
+    # GoogleProvider.name is "google" — the legacy "gemini" key was a no-op
+    # alias, which silently fell through to the 8000 default and starved
+    # /api/v1/extract of output budget (only ~2.6K tokens for response,
+    # which truncated WSB trip-doc extracts AFTER `events` and dropped
+    # the `housings` + `golfRounds` sections entirely).
+    "google":    250000,  # actual quota is ~1M; we cap to keep one call snappy
+    "gemini":    250000,  # legacy alias for any caller passing provider="gemini"
     "openrouter": 15000,
     "deepseek":  60000,
     "mistral":   30000,
@@ -439,8 +445,12 @@ async def extract_json(
 
     # Per-provider budget. Reserve ~30% for output, ~70% for input. If the
     # estimated input + schema + sys overflows the input share we chunk.
+    # Output cap raised from 8K → 32K to fit a full WSB trip-doc extract
+    # (trip_meta + ~15 guests + ~12 venues + ~15 events + housings + golf
+    # rounds + decisions + contests = ~6-10K tokens of JSON; 8K cap was
+    # truncating mid-extract and silently losing the tail sections).
     budget = _PROVIDER_TPM_BUDGET.get(prov.name, 8000)
-    out_reserve = min(8000, max(2000, budget // 3))
+    out_reserve = min(32000, max(2000, budget // 3))
     input_budget = budget - out_reserve - sys_tokens - schema_tokens - 200
 
     doc_tokens = _est_tokens(text)
