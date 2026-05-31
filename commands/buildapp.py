@@ -176,6 +176,34 @@ Instructions for the backend integration:
   3. Falls back to hardcoded demo data if the network call fails
 - The UI should load data from ConfigRepository on launch.
 - Use "camelCase" property names in data classes — they match the DB column names exactly.
+
+## Realtime Sync (Supabase Realtime via WebSocket)
+
+The app must live-update when data changes on the server. Implement a
+`SupabaseRealtime` class in commonMain that:
+
+1. Opens a WebSocket to `wss://<supabase_host>/realtime/v1/websocket?apikey=<anon_key>&vsn=1.0.0`
+   using Ktor's WebSockets plugin (add `io.ktor:ktor-client-websockets` dependency).
+2. Joins a single Phoenix channel `"realtime:db-changes"` by sending a `phx_join` message
+   whose `payload.config.postgres_changes` array subscribes to every app table
+   (event `"*"`, schema `"public"`).
+3. Sends a Phoenix heartbeat (`{{"topic":"phoenix","event":"heartbeat",...}}`) every 30 seconds.
+4. On receiving a `"postgres_changes"` event, calls an `onChangeDetected` callback.
+5. Auto-reconnects with a 5-second delay on failure; exposes a `status: StateFlow<String>`
+   for debug visibility ("idle", "connecting...", "live (N changes)", "error: ...").
+6. Provides `start(scope: CoroutineScope)` and `stop()` methods.
+
+Integrate into the app lifecycle:
+- `ConfigRepository` should own the `SupabaseRealtime` instance.
+  `startRealtime(scope)` creates it with `onChangeDetected = {{ refreshFromSupabase() }}`.
+- In `App.kt`, call `repository.startRealtime(scope)` inside a `LaunchedEffect`
+  and `repository.stopRealtime()` inside `DisposableEffect {{ onDispose {{ ... }} }}`.
+- When any admin/editor writes data (REST POST/PATCH/DELETE), immediately call
+  `repository.refreshFromSupabase()` for instant local feedback.
+  Other clients receive the update via the WebSocket broadcast automatically.
+
+Do NOT use any Supabase client library — raw Ktor WebSocket is the correct approach
+for KMP (no official Supabase Kotlin Realtime SDK exists for all targets).
 """
 
     # Detect auth-related apps and inject Supabase Auth pattern
