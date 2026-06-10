@@ -219,6 +219,14 @@ Create an `AuthScreen` composable with:
 - Loading indicator during network calls
 - Do NOT use emoji in the UI — use Material Icons instead
 
+### Email Confirmation
+Supabase projects have email confirmation ON by default. After a successful
+sign-up, the user typically cannot sign in until they click the link in their
+email. Handle this explicitly: after `/auth/v1/signup`, check whether the
+response contains a `session` (auto-confirmed) or just a `user` (needs confirm).
+When it's the latter, show a clear "Check your email to confirm your account"
+message instead of attempting to route into the app.
+
 ### Auth-Gated Routing in App.kt
 Gate the main content behind authentication:
 - `AuthState.Unknown` → show a centered `CircularProgressIndicator`
@@ -234,7 +242,10 @@ reset the UI back to `AuthScreen`.
 
 ### Authenticated API Calls
 Once signed in, include the user's access token in all Supabase REST/RPC calls:
-`Authorization: Bearer <accessToken>` (instead of the anon key).
+`Authorization: Bearer <accessToken>` (instead of the anon key). Keep the
+`apikey: <anon_key>` header AND any `Content-Profile: <db_schema>` header from
+the base ConfigRepository pattern — the bearer token replaces the
+Authorization-side anon key only, not the schema or apikey headers.
 """
 
     return base
