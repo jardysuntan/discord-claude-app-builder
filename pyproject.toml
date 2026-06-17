@@ -1,0 +1,20 @@
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["."]
+addopts = "-q"
+# Re-include pytest's default ".*" exclusion (overriding norecursedirs drops it),
+# so collection skips .git, .claude/worktrees, .pytest_cache, .wrangler, etc.
+norecursedirs = [
+    ".*",
+    "*.egg",
+    "venv",
+    ".venv",
+    "node_modules",
+    "__pycache__",
+    "bridge-extract",
+    "app-bot-diff-dashboard",
+    "weresobach-progress-dashboard",
+    "templates",
+    "logs",
+    "smoketest-results",
+]
