@@ -695,7 +695,7 @@ async def golf_course_lookup(req: GolfCourseLookupRequest,
 
                 if top_score == 0:
                     results.append({
-                        "id": c.id, "status": "not_found", "query": query,
+                        "id": c.id, "status": "not_found", "query": last_query_used,
                         "candidates": [
                             {"course_id": ck.get("id"),
                              "canonical_name": f"{ck.get('club_name')} — {ck.get('course_name')}".strip(" —"),
