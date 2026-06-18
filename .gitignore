@@ -26,6 +26,11 @@ APP_REGISTRY.md
 cost_tracker.json
 claude_sessions.json
 app_plans.json
+claude_session_resumes.json
+claude_session_tokens.json
+user_defaults.json
+user_platforms.json
+user_tips.json
 
 # Smoke test logs
 smoketest-results/
