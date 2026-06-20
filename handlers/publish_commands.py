@@ -6,6 +6,7 @@ Extracted from bot.py lines 2107-2182.
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import TYPE_CHECKING
 
@@ -27,6 +28,52 @@ from views.playstore_views import (
 if TYPE_CHECKING:
     from bot_context import BotContext
     from parser import Command
+
+log = logging.getLogger(__name__)
+
+
+def _has_skip_security(cmd: Command) -> bool:
+    """Check if --skip-security flag was passed."""
+    return bool(cmd.raw_cmd and "--skip-security" in cmd.raw_cmd)
+
+
+async def _run_security_gate(
+    ctx: BotContext, cmd: Command, channel, user_id: int, is_admin: bool,
+    ws_key: str, ws_path: str, publish_target: str,
+) -> bool:
+    """Run security scan before publish. Returns True if publish should proceed."""
+    skip = _has_skip_security(cmd)
+
+    if skip:
+        log.warning(
+            "security_scan SKIPPED by flag: user=%d ws=%s target=%s",
+            user_id, ws_key, publish_target,
+        )
+        await ctx.send(
+            channel,
+            "\u26a0\ufe0f **Security scan skipped** via `--skip-security`. "
+            "Publishing without security review — this has been logged.",
+        )
+        return True
+
+    from commands.security_scan import run_security_scan
+    from views.security_views import security_scan_embed, SecurityGateView
+
+    await ctx.send(channel, "\U0001f6e1\ufe0f Running pre-publish security scan...")
+    scan = await run_security_scan(ctx.claude, ws_key, ws_path)
+    embed = security_scan_embed(scan)
+
+    if scan.should_block:
+        view = SecurityGateView(
+            ctx, channel, user_id, is_admin, ws_key, ws_path,
+            publish_target=publish_target, scan=scan,
+        )
+        await channel.send(embed=embed, view=view)
+        return False
+
+    # Non-blocking: show results and continue
+    await channel.send(embed=embed)
+    return True
 
 
 async def _run_testflight_publish(
@@ -60,6 +107,14 @@ async def handle_testflight_cmd(
     ws_key, ws_path = ctx.registry.resolve(None, user_id)
     if not ws_path:
         await ctx.send(channel, "❌ No workspace set.")
+        return
+
+    # Security gate (runs before appraisal)
+    proceed = await _run_security_gate(
+        ctx, cmd, channel, user_id, is_admin, ws_key, ws_path,
+        publish_target="testflight",
+    )
+    if not proceed:
         return
 
     # Appraisal gate
@@ -150,6 +205,14 @@ async def handle_playstore_cmd(
     ws_key, ws_path = ctx.registry.resolve(None, user_id)
     if not ws_path:
         await ctx.send(channel, "❌ No workspace set.")
+        return
+
+    # Security gate (runs before appraisal)
+    proceed = await _run_security_gate(
+        ctx, cmd, channel, user_id, is_admin, ws_key, ws_path,
+        publish_target="playstore",
+    )
+    if not proceed:
         return
 
     # Appraisal gate
