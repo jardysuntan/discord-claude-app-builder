@@ -31,6 +31,7 @@ from helpers.screenshot_compare import (
     build_visual_diff_prompt,
     _guess_route_from_text,
 )
+from commands.backend import detect_persistence_need
 from workspace_spec import format_spec_context, load_workspace_spec
 
 if TYPE_CHECKING:
@@ -106,6 +107,14 @@ async def handle_prompt(
         await ctx.send(channel,
             "\U0001f5fa\ufe0f **Maps:** Leaflet.js maps are fully supported across all platforms. "
             "Google Maps will be supported in a future update."
+        )
+
+    # Auto-detect persistence needs and suggest backend
+    if detect_persistence_need(prompt):
+        await ctx.send(
+            channel,
+            "💡 **Backend suggested:** Your request sounds like it needs data persistence or auth. "
+            "Use `/add-backend firebase` or `/add-backend supabase` to add a full backend with one command.",
         )
 
     # Download image attachments and augment prompt with visual comparison
