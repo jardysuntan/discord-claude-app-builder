@@ -156,6 +156,29 @@ async def on_message(message: discord.Message):
     if not text and not has_images:
         return
 
+    # ── Annotation detection: image reply to a bot screenshot ────────
+    reference_image_urls: list[str] = []
+    if has_images and message.reference and message.reference.message_id:
+        try:
+            ref_msg = await channel.fetch_message(message.reference.message_id)
+            if ref_msg.author.id == client.user.id:
+                ref_images = [
+                    att.url for att in ref_msg.attachments
+                    if att.filename.lower().endswith(
+                        (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
+                    )
+                ]
+                if ref_images:
+                    reference_image_urls = ref_images
+                    if not text:
+                        text = (
+                            "Apply the changes shown in my annotated screenshot. "
+                            "I drew on the previous screenshot to show exactly "
+                            "what I want changed."
+                        )
+        except Exception:
+            pass
+
     # Image-only message: treat as a visual bug report
     if not text and has_images:
         text = "Fix the visual bug shown in the attached screenshot(s). Compare against the current app state and make the necessary code changes."
@@ -199,7 +222,11 @@ async def on_message(message: discord.Message):
     # ── Claude prompts ───────────────────────────────────────────────────
     if isinstance(parsed, (WorkspacePrompt, FallbackPrompt)):
         try:
-            await handle_prompt(ctx, parsed, channel, user_id, is_admin, attachments=message.attachments)
+            await handle_prompt(
+                ctx, parsed, channel, user_id, is_admin,
+                attachments=message.attachments,
+                reference_image_urls=reference_image_urls,
+            )
         except Exception as exc:
             title, detail = format_exception(exc)
             ctx_str = f"prompt from user={user_id}"

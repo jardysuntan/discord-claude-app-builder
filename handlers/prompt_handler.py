@@ -29,6 +29,7 @@ from helpers.prompt_suggest import suggest as suggest_prompt
 from helpers.screenshot_compare import (
     take_app_screenshot,
     build_visual_diff_prompt,
+    build_annotation_prompt,
     _guess_route_from_text,
 )
 from workspace_spec import format_spec_context, load_workspace_spec
@@ -58,6 +59,30 @@ async def _save_attachments(attachments, ws_path: str) -> list[str]:
     return saved
 
 
+async def _download_reference_images(urls: list[str], ws_path: str) -> list[str]:
+    """Download reference images from Discord CDN URLs into the workspace."""
+    if not urls:
+        return []
+    import aiohttp
+    from pathlib import Path
+
+    upload_dir = Path(ws_path) / "_discord_uploads"
+    upload_dir.mkdir(exist_ok=True)
+    saved: list[str] = []
+    async with aiohttp.ClientSession() as session:
+        for i, url in enumerate(urls):
+            try:
+                async with session.get(url) as resp:
+                    if resp.status == 200:
+                        ext = Path(url.split("?")[0]).suffix or ".png"
+                        dest = upload_dir / f"_original_screenshot_{i}{ext}"
+                        dest.write_bytes(await resp.read())
+                        saved.append(str(dest))
+            except Exception:
+                continue
+    return saved
+
+
 async def handle_prompt(
     ctx: BotContext,
     parsed: WorkspacePrompt | FallbackPrompt,
@@ -65,6 +90,7 @@ async def handle_prompt(
     user_id: int,
     is_admin: bool,
     attachments=None,
+    reference_image_urls: list[str] | None = None,
 ) -> None:
     """Route a workspace or fallback prompt to Claude, with cost gating,
     cancel support, SQL sync, auto web build, and auto preview."""
@@ -111,13 +137,26 @@ async def handle_prompt(
     # Download image attachments and augment prompt with visual comparison
     image_paths = await _save_attachments(attachments, ws_path)
     if image_paths:
-        await ctx.send(channel, f"📎 {len(image_paths)} image(s) attached — capturing current app state…")
         route = _guess_route_from_text(prompt)
-        bot_screenshot = await take_app_screenshot(path=route)
-        if bot_screenshot:
-            await ctx.send(channel, f"📸 Captured current app at `{route}` for comparison.")
-        diff_prompt = build_visual_diff_prompt(image_paths, bot_screenshot)
-        prompt = f"{diff_prompt}\n\nUser message: {prompt}"
+
+        # Visual Design Mode: user replied to a bot screenshot with annotations
+        if reference_image_urls:
+            await ctx.send(channel, f"🎨 Visual Design Mode — {len(image_paths)} annotated image(s) received.")
+            original_paths = await _download_reference_images(reference_image_urls, ws_path)
+            bot_screenshot = await take_app_screenshot(path=route)
+            if bot_screenshot:
+                await ctx.send(channel, f"📸 Captured current app at `{route}` for comparison.")
+            annotation_prompt = build_annotation_prompt(
+                image_paths, original_paths, bot_screenshot,
+            )
+            prompt = f"{annotation_prompt}\n\nUser message: {prompt}"
+        else:
+            await ctx.send(channel, f"📎 {len(image_paths)} image(s) attached — capturing current app state…")
+            bot_screenshot = await take_app_screenshot(path=route)
+            if bot_screenshot:
+                await ctx.send(channel, f"📸 Captured current app at `{route}` for comparison.")
+            diff_prompt = build_visual_diff_prompt(image_paths, bot_screenshot)
+            prompt = f"{diff_prompt}\n\nUser message: {prompt}"
 
     # ── Prompt suggestion ────────────────────────────────────────────────
     if config.ENABLE_PROMPT_SUGGESTIONS and not image_paths:
