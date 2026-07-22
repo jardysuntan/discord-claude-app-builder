@@ -232,6 +232,26 @@ Add a sign-out option in the app's settings or profile area.
 Sign out must: call the server logout endpoint, clear persisted tokens, and
 reset the UI back to `AuthScreen`.
 
+**Sign-out hygiene:** The sign-out function must also clear ALL user-specific
+state from PlatformPreferences — not just auth tokens. This includes any
+stored user role, selected entity/group ID, cached user profile data, and
+any other per-user preferences. If this is not done, the next user who signs
+in will inherit the previous user's role and preferences (e.g. an organizer
+role leaking to a regular member).
+
+### Auth-Conditional UI
+Only show sign-out and delete-account UI elements when the user is actually
+authenticated (`authState is AuthState.Authenticated`). Pass an
+`isAuthenticated: Boolean` flag to screens that show these actions. If the
+app supports guest/anonymous access, guests should NOT see sign-out or
+account-management buttons — those are meaningless for unauthenticated users.
+
+### Sign Out Accessibility
+Provide a sign-out option on the main list/home screen (e.g. in an overflow
+menu or top bar action), not only in a nested settings screen. Users should
+be able to sign out without navigating deep into the app. If the app has a
+list-of-entities screen (e.g. "My Trips", "My Teams"), add sign-out there.
+
 ### Authenticated API Calls
 Once signed in, include the user's access token in all Supabase REST/RPC calls:
 `Authorization: Bearer <accessToken>` (instead of the anon key).
