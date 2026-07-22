@@ -176,6 +176,35 @@ Instructions for the backend integration:
   3. Falls back to hardcoded demo data if the network call fails
 - The UI should load data from ConfigRepository on launch.
 - Use "camelCase" property names in data classes — they match the DB column names exactly.
+
+## Supabase Realtime (live updates via WebSocket)
+
+Create a `SupabaseRealtime` class in `data/SupabaseRealtime.kt` that keeps
+the UI in sync across multiple clients using Supabase's Realtime WebSocket:
+
+1. **Connection**: Use Ktor's `HttpClient` with the `WebSockets` plugin.
+   Connect to `wss://<project-ref>.supabase.co/realtime/v1/websocket?apikey=<anon_key>&vsn=1.0.0`.
+2. **Channel join**: Send a `phx_join` message for topic `"realtime:db-changes"`
+   with a `postgres_changes` config listing all tables the app watches:
+   ```json
+   {{"event": "*", "schema": "public", "table": "<table_name>"}}
+   ```
+3. **Heartbeat**: Send `{{"topic": "phoenix", "event": "heartbeat", "payload": {{}}, "ref": null}}`
+   every 30 seconds to keep the connection alive.
+4. **Change detection**: Listen for `"postgres_changes"` events. On any change,
+   call an `onChangeDetected` callback that triggers a full data reload
+   via ConfigRepository (refetch-on-notify pattern — simpler and safer than
+   applying deltas).
+5. **Reconnection**: On disconnect or error, wait 5 seconds and reconnect
+   automatically. Expose a `StateFlow<String>` for connection status
+   (idle/connecting/live/error/reconnecting).
+6. **Lifecycle**: Wire `startRealtime(scope)` in a `LaunchedEffect(Unit)` and
+   `stopRealtime()` in a `DisposableEffect(Unit) {{ onDispose {{ ... }} }}` in
+   App.kt so the connection is tied to the Compose lifecycle.
+
+This ensures that when one user makes a change (e.g. adds a score, updates
+an event), all other connected clients see the update within seconds without
+manual refresh.
 """
 
     # Detect auth-related apps and inject Supabase Auth pattern
