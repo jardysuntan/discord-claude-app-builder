@@ -77,6 +77,14 @@ def infer_app_name(description: str) -> str:
     return "".join(w.capitalize() for w in name_words if w.isalpha()) or "MyApp"
 
 
+MULTI_TENANT_KEYWORDS = {
+    "trip", "trips", "group", "groups", "team", "teams", "organization",
+    "org", "workspace", "event", "events", "room", "rooms", "lobby",
+    "club", "clubs", "household", "project", "projects", "league",
+    "community", "channel", "party", "session", "classroom",
+    "multi-user", "collaborative", "shared", "invite", "join code",
+}
+
 SCHEMA_PROMPT = """You are a database architect. Given the app description below,
 generate a PostgreSQL schema for Supabase.
 
@@ -104,6 +112,35 @@ Rules:
 - ALL primary keys must be uuid. ALL foreign keys must also be uuid and reference
   the uuid primary key. Never mix types (e.g. text FK → uuid PK).
 - Keep it minimal — only tables the app clearly needs.
+{multi_tenant_section}"""
+
+MULTI_TENANT_SCHEMA_SECTION = """
+## Multi-tenant / group-based pattern
+
+This app involves groups of users collaborating in a shared context.
+Apply the following multi-tenant schema pattern:
+
+1. **Parent entity table** (e.g. `trips`, `teams`, `projects` — name it to match
+   the app's domain). Columns: id (uuid PK), name text, description text,
+   "joinCode" text UNIQUE, "organizerCode" text, "createdBy" uuid,
+   "createdAt" timestamptz DEFAULT now().
+2. **Membership table** (e.g. `trip_members`, `team_members`). Columns:
+   id (uuid PK), "<parentId>" uuid NOT NULL REFERENCES <parent>(id) ON DELETE CASCADE,
+   "userId" uuid, "guestId" text, role text DEFAULT 'member',
+   "createdAt" timestamptz DEFAULT now().
+   Add a UNIQUE constraint on (<parentId>, "userId") and on (<parentId>, "guestId").
+3. **Scope all child tables** — every data table gets a "<parentId>" uuid NOT NULL
+   REFERENCES <parent>(id) ON DELETE CASCADE column, with an index on it.
+4. **Entity-scoped RPC** — in addition to get_app_config(), create a
+   `get_<parent>_config(p_<parent>_id UUID)` function that filters every
+   json_agg query with `WHERE "<parentId>" = p_<parent>_id`. This is the
+   primary data-loading RPC. Also add:
+   - `get_<parent>_by_join_code(p_join_code TEXT)` — returns the parent row
+     matching the join code (for invite-link flows).
+   - `get_my_<parents>(p_user_id UUID, p_guest_id TEXT)` — returns parent rows
+     the user is a member of (joined via membership table).
+5. **get_app_config()** should still exist as a fallback — it can call
+   get_<parent>_config with the oldest parent entity's id.
 """
 
 
@@ -176,6 +213,14 @@ Instructions for the backend integration:
   3. Falls back to hardcoded demo data if the network call fails
 - The UI should load data from ConfigRepository on launch.
 - Use "camelCase" property names in data classes — they match the DB column names exactly.
+- If the schema includes entity-scoped RPCs (e.g. get_trip_config, get_team_config),
+  ConfigRepository should prefer calling those with an entity ID parameter:
+  POST {supabase_url}/rest/v1/rpc/get_<entity>_config with JSON body {{"p_<entity>_id": "<uuid>"}}.
+  Use get_app_config() only as a fallback when no entity is selected.
+- If the schema includes a join-code RPC (e.g. get_<entity>_by_join_code),
+  add a joinByCode(code: String) method that POSTs to that RPC.
+- If the schema includes a my-entities RPC (e.g. get_my_<entities>),
+  add a loadMyEntities(userId: String) method that POSTs to that RPC.
 """
 
     # Detect auth-related apps and inject Supabase Auth pattern
@@ -377,10 +422,17 @@ async def handle_buildapp(
             schema_section = ""
             search_path_instruction = "Tables go in the public schema (default)"
             func_qualify_instruction = ""
+        desc_words = set(description.lower().split())
+        data_words = set(data_description.lower().split()) if data_description else set()
+        all_words = desc_words | data_words
+        is_multi_tenant = bool(all_words & MULTI_TENANT_KEYWORDS)
+        multi_tenant_section = MULTI_TENANT_SCHEMA_SECTION if is_multi_tenant else ""
+
         schema_prompt = SCHEMA_PROMPT.format(
             description=description, app_name=app_name, data_section=data_section,
             schema_section=schema_section, search_path_instruction=search_path_instruction,
             func_qualify_instruction=func_qualify_instruction,
+            multi_tenant_section=multi_tenant_section,
         )
         schema_result = await claude.run(schema_prompt, slug, ws_path)
         schema_sql = extract_sql(schema_result.stdout)
