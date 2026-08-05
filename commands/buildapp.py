@@ -127,7 +127,45 @@ Requirements:
 - Verify the code compiles for Android target first
 - IMPORTANT: Do NOT use emoji characters (Unicode emoji) in the UI. They render as broken boxes on the Web (WASM) target. Use Material Icons from `androidx.compose.material.icons.Icons` instead.
 
-Write complete, working code. No TODOs or placeholders."""
+Write complete, working code. No TODOs or placeholders.
+
+## UI State Handling
+
+Every screen that displays a list or collection MUST implement three visual states
+using a `when` block:
+
+```kotlin
+when {{
+    !hasLoadedOnce && isLoading -> {{
+        // Loading state: centered CircularProgressIndicator
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {{
+            CircularProgressIndicator()
+        }}
+    }}
+    items.isEmpty() -> {{
+        // Empty state: a dedicated composable with headline + subtext + CTA
+        EmptyItemList(onCreateItem = {{ /* navigate to create */ }})
+    }}
+    else -> {{
+        // Data state: render the actual list content
+    }}
+}}
+```
+
+For every empty state composable:
+- Show a headline: "No [items] yet"
+- Show helpful subtext: "Create a new [item] to get started." or similar
+- Include an actionable button if the user can create the missing content
+- Do NOT use emoji in the text — use Material Icons for visual accents
+
+For any dialog or bottom sheet that performs a write operation (save/delete/update):
+- Track `saving: Boolean` and `error: String?` state
+- While saving: show `CircularProgressIndicator` inside the confirm button and
+  change button text to "Saving..." or "Deleting..."
+- Block dialog dismiss while saving: `onDismissRequest = {{ if (!saving) onDismiss() }}`
+- On failure: display the error message in `MaterialTheme.colorScheme.error` text
+- Use Kotlin `Result` with `.fold(onSuccess = {{ dismiss }}, onFailure = {{ error = it.message }})` for async operations
+"""
 
     # Resolve Supabase creds
     sb_project_ref = config.SUPABASE_PROJECT_REF
