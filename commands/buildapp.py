@@ -104,6 +104,11 @@ Rules:
 - ALL primary keys must be uuid. ALL foreign keys must also be uuid and reference
   the uuid primary key. Never mix types (e.g. text FK → uuid PK).
 - Keep it minimal — only tables the app clearly needs.
+- Enable realtime for every table by appending:
+  DO $$ BEGIN
+    ALTER PUBLICATION supabase_realtime ADD TABLE <table1>, <table2>, ...;
+  EXCEPTION WHEN duplicate_object THEN NULL;
+  END $$;
 """
 
 
@@ -176,6 +181,44 @@ Instructions for the backend integration:
   3. Falls back to hardcoded demo data if the network call fails
 - The UI should load data from ConfigRepository on launch.
 - Use "camelCase" property names in data classes — they match the DB column names exactly.
+"""
+
+    # Inject Supabase Realtime pattern when backend is provisioned
+    if schema_sql and sb_anon_key:
+        supabase_url = f"https://{sb_project_ref}.supabase.co"
+        base += f"""
+
+## Supabase Realtime (Live Updates)
+
+Add live-sync so the UI updates instantly when any user changes data.
+
+### Dependencies
+Add `io.ktor:ktor-client-websockets` to commonMain dependencies in build.gradle.kts.
+
+### SupabaseRealtime.kt
+Create a `data/SupabaseRealtime.kt` class that:
+1. Opens a WebSocket to `wss://{sb_project_ref}.supabase.co/realtime/v1/websocket?apikey={sb_anon_key}&vsn=1.0.0`
+2. Sends a Phoenix-protocol `phx_join` message on topic `"realtime:db-changes"` with a
+   `postgres_changes` config entry for every app table (event: "*", schema: "public")
+3. Sends a heartbeat (`phx_heartbeat`) every 30 seconds to keep the connection alive
+4. On any `"postgres_changes"` event, fires an `onChangeDetected` callback
+5. Auto-reconnects with 5-second backoff on disconnect or error
+6. Exposes a `status: StateFlow<String>` (idle / connecting / live / error / reconnecting)
+7. Provides `start(scope: CoroutineScope)` and `stop()` methods
+
+### Wiring
+- In ConfigRepository, instantiate `SupabaseRealtime` with `onChangeDetected` calling your
+  data-refresh function (e.g. `refreshFromSupabase()`)
+- Expose `startRealtime(scope)` / `stopRealtime()` from ConfigRepository
+- In App.kt, call `repository.startRealtime(scope)` inside a `LaunchedEffect(Unit)` and
+  `repository.stopRealtime()` inside `DisposableEffect(Unit) {{ onDispose {{ ... }} }}`
+
+### Realtime Publication SQL
+The schema must also enable realtime for every table:
+```sql
+ALTER PUBLICATION supabase_realtime ADD TABLE <table1>, <table2>, ...;
+```
+Wrap in `DO $$ BEGIN ... EXCEPTION WHEN duplicate_object THEN NULL; END $$` for idempotency.
 """
 
     # Detect auth-related apps and inject Supabase Auth pattern
