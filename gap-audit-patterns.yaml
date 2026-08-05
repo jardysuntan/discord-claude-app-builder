@@ -68,6 +68,26 @@ patterns:
       `PlatformPreferences` and expose a `StateFlow<UserSession?>` so `App.kt` can route to
       AuthScreen when unauthenticated.
 
+  - name: auth_rls_policies
+    description: RLS policies for both anon and authenticated roles (prevents silent zero-row returns)
+    file_globs: ["supabase/schema.sql", "supabase/migrations/*.sql"]
+    markers:
+      - "TO authenticated"
+      - "auth_access"
+      - "auth read"
+      - "auth write"
+    mode: any
+    weresobach_exemplars:
+      - weresobach/supabase/migrations/002_auth_rls_policies.sql
+      - weresobach/supabase/schema.sql
+    prompt_fix: |
+      The schema must include RLS policies for BOTH the anon and authenticated roles.
+      Supabase PostgREST uses the `anon` role for unauthenticated requests and
+      `authenticated` for JWT-bearing requests. A single "public_access" policy only
+      covers anon — authenticated requests silently return zero rows without a
+      matching policy. Add: CREATE POLICY "auth_access" ON <t> FOR ALL TO
+      authenticated USING (true) WITH CHECK (true); for every table.
+
   - name: creator_flow
     description: CreateTripScreen + ConfigRepository.createTrip RPC that returns a join code
     file_globs: ["composeApp/src/**/*.kt"]
