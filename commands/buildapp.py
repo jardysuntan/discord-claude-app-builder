@@ -98,9 +98,13 @@ Rules:
 - Add a get_app_config() RPC that returns all rows from every table as a single
   JSON object via json_build_object + (SELECT json_agg(...) FROM <table>).
 {func_qualify_instruction}
-- Add permissive RLS: ALTER TABLE <t> ENABLE ROW LEVEL SECURITY;
-  CREATE POLICY "public_access" ON <t> FOR ALL USING (true) WITH CHECK (true);
-  for every table.
+- Add permissive RLS for BOTH the anon and authenticated roles on every table:
+  ALTER TABLE <t> ENABLE ROW LEVEL SECURITY;
+  CREATE POLICY "anon_access" ON <t> FOR ALL USING (true) WITH CHECK (true);
+  CREATE POLICY "auth_access" ON <t> FOR ALL TO authenticated USING (true) WITH CHECK (true);
+  IMPORTANT: Supabase PostgREST uses the `anon` role for unauthenticated requests
+  and the `authenticated` role for requests with a user JWT. If you only create a
+  policy for one role, requests from the other role silently return zero rows.
 - ALL primary keys must be uuid. ALL foreign keys must also be uuid and reference
   the uuid primary key. Never mix types (e.g. text FK → uuid PK).
 - Keep it minimal — only tables the app clearly needs.
@@ -235,6 +239,13 @@ reset the UI back to `AuthScreen`.
 ### Authenticated API Calls
 Once signed in, include the user's access token in all Supabase REST/RPC calls:
 `Authorization: Bearer <accessToken>` (instead of the anon key).
+
+### RLS Note
+The database schema already includes RLS policies for both the `anon` and
+`authenticated` Postgres roles. This is critical: when a user signs in and
+you send their JWT in the Authorization header, Supabase PostgREST switches
+from the `anon` role to `authenticated`. Without a matching policy for
+`authenticated`, all queries silently return zero rows. Both policies must exist.
 """
 
     return base
