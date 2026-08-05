@@ -104,6 +104,28 @@ patterns:
       `ConfigRepository.findTripByJoinCode(code)` and `ConfigRepository.joinTrip(tripId, userId)`
       which insert into the `guests` table. On success navigate into the joined trip.
 
+  - name: empty_states
+    description: Every list/collection screen shows a friendly empty-state composable instead of blank
+    file_globs: ["composeApp/src/**/ui/screens/*.kt"]
+    markers:
+      - ".isEmpty()"
+      - "No trips yet"
+      - "No rounds scheduled"
+      - "No events yet"
+      - "No housing confirmed"
+      - "No contests yet"
+    mode: any
+    weresobach_exemplars:
+      - composeApp/src/commonMain/kotlin/com/weressobach/app/ui/screens/TripListScreen.kt
+      - composeApp/src/commonMain/kotlin/com/weressobach/app/ui/screens/GolfScreen.kt
+      - composeApp/src/commonMain/kotlin/com/weressobach/app/ui/screens/ItineraryScreen.kt
+      - composeApp/src/commonMain/kotlin/com/weressobach/app/ui/screens/HousingScreen.kt
+    prompt_fix: |
+      Every screen that renders a list must implement a three-state `when` block:
+      loading (CircularProgressIndicator), empty (dedicated composable with headline,
+      subtext, and CTA button), and data (the actual content). Mutation dialogs must
+      track `saving`/`error` state, block dismiss while saving, and show inline errors.
+
   - name: maps
     description: Leaflet-in-WebView map (buildLeafletHtml + PlatformWebView)
     file_globs: ["composeApp/src/**/*.kt"]
