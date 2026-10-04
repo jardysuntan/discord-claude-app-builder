@@ -151,6 +151,7 @@ class ClaudeRunner:
 
     def __init__(self):
         self._sessions: dict[str, str] = {}
+        self._session_costs: dict[str, float] = {}  # session_id → last seen cumulative cost (for per-invocation delta)
         self._session_tokens: dict[str, int] = {}  # workspace → last known cumulative tokens (informational)
         self._session_resumes: dict[str, int] = {}  # workspace → number of prompts in current session
         self._run_durations: dict[str, list[float]] = {}  # workspace → last N durations
@@ -584,11 +585,21 @@ class ClaudeRunner:
         resumes = self._session_resumes.get(workspace_key, 0)
         print(f"[claude] Session {workspace_key}: {resumes}/{config.SESSION_MAX_RESUMES} resumes, cumulative_tokens={result_context_tokens:,}")
 
+        # Claude Code reports total_cost_usd as the CUMULATIVE cost of the whole
+        # (possibly resumed) session, not the cost of this single invocation.
+        # Callers accumulate the returned cost (budget tracker, daily cost tracker),
+        # so hand back the per-invocation delta to avoid multiply-counting earlier turns.
+        invocation_cost_usd = result_cost_usd
+        if result_session_id:
+            prev_cost = self._session_costs.get(result_session_id, 0.0)
+            invocation_cost_usd = max(0.0, result_cost_usd - prev_cost)
+            self._session_costs[result_session_id] = result_cost_usd
+
         return ClaudeResult(
             stdout=result_text,
             stderr=stderr,
             exit_code=exit_code,
             session_id=result_session_id or session_id,
-            total_cost_usd=result_cost_usd,
+            total_cost_usd=invocation_cost_usd,
             context_tokens=result_context_tokens,
         )

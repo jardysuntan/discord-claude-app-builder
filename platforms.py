@@ -856,43 +856,60 @@ class WebPlatform:
             "CLOUDFLARE_ACCOUNT_ID": config.CLOUDFLARE_ACCOUNT_ID,
         }
 
-        # Ensure the Pages project exists (idempotent — fails silently if already created)
-        create_proc = await asyncio.create_subprocess_exec(
-            "npx", "wrangler", "pages", "project", "create", project,
-            "--production-branch=main",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-        )
-        create_out, create_err = await asyncio.wait_for(create_proc.communicate(), timeout=30)
-        if create_proc.returncode and create_proc.returncode != 0:
-            detail = (create_err or create_out or b"").decode(errors="replace")[:300]
-            print(f"[CF Pages] project create failed for '{project}' (rc={create_proc.returncode}): {detail}")
+        # Retry with backoff: a transient CF API failure at project-create otherwise
+        # cascades into "project does not exist" at deploy with no recovery, and
+        # CF's publish step can 500 ("Unknown internal error") for tens of seconds
+        # at a time — a single quick retry lands inside the same outage window.
+        combined = ""
+        max_attempts = 3
+        for attempt in range(max_attempts):
+            if attempt:
+                await asyncio.sleep(15 * attempt)
 
-        proc = await asyncio.create_subprocess_exec(
-            "npx", "wrangler", "pages", "deploy", str(dist_dir),
-            f"--project-name={project}",
-            "--commit-dirty=true",
-            "--branch=main",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-        )
-        try:
-            out_bytes, err_bytes = await asyncio.wait_for(proc.communicate(), timeout=120)
-        except asyncio.TimeoutError:
-            proc.kill()
-            return None
-        out = out_bytes.decode(errors="replace")
-        err = err_bytes.decode(errors="replace")
-        combined = out + err
+            # Ensure the Pages project exists (idempotent — fails silently if already created)
+            create_proc = await asyncio.create_subprocess_exec(
+                "npx", "wrangler", "pages", "project", "create", project,
+                "--production-branch=main",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+            try:
+                create_out, create_err = await asyncio.wait_for(create_proc.communicate(), timeout=60)
+                if create_proc.returncode and create_proc.returncode != 0:
+                    detail = (create_err or create_out or b"").decode(errors="replace")[:300]
+                    print(f"[CF Pages] project create failed for '{project}' (rc={create_proc.returncode}): {detail}")
+            except asyncio.TimeoutError:
+                create_proc.kill()
+                print(f"[CF Pages] project create timed out for '{project}'")
 
-        if proc.returncode != 0:
+            proc = await asyncio.create_subprocess_exec(
+                "npx", "wrangler", "pages", "deploy", str(dist_dir),
+                f"--project-name={project}",
+                "--commit-dirty=true",
+                "--branch=main",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+            try:
+                out_bytes, err_bytes = await asyncio.wait_for(proc.communicate(), timeout=120)
+            except asyncio.TimeoutError:
+                proc.kill()
+                return None
+            out = out_bytes.decode(errors="replace")
+            err = err_bytes.decode(errors="replace")
+            combined = out + err
+
+            if proc.returncode == 0:
+                break
+
             # Log so we can diagnose — caller will fall back to tunnel
-            msg = f"[CF Pages] deploy failed (rc={proc.returncode}): {combined[:500]}"
+            msg = f"[CF Pages] deploy failed (attempt {attempt + 1}/{max_attempts}, rc={proc.returncode}): {combined[:500]}"
             print(msg)
             import logging
             logging.warning(msg)
+        else:
             return None
 
         # Parse deployment URL from wrangler output
