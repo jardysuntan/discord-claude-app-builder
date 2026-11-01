@@ -274,15 +274,20 @@ async def _run_scenario(
         try:
             import httpx
             async with httpx.AsyncClient(timeout=15, follow_redirects=True) as hc:
-                # CF Pages can take a few seconds to propagate — retry up to 3 times
-                for attempt in range(3):
-                    resp = await hc.head(url)
+                # CF Pages DNS for a fresh deployment subdomain can take 30+s
+                # to resolve — treat connect/DNS errors as transient and retry.
+                for attempt in range(10):
+                    try:
+                        resp = await hc.head(url)
+                    except httpx.TransportError as exc:
+                        deploy_detail = str(exc)[:200]
+                        await asyncio.sleep(6)
+                        continue
                     if resp.status_code == 200:
                         deploy_ok = True
                         break
-                    await asyncio.sleep(3)
-                if not deploy_ok:
                     deploy_detail = f"URL {url} returned {resp.status_code}"
+                    await asyncio.sleep(6)
         except Exception as exc:
             deploy_detail = str(exc)[:200]
         dur = time.time() - t0
